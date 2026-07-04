@@ -1,0 +1,52 @@
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Data & databases
+*.db
+*.sqlite
+*.zip
+data/
+datasets/
+outputs/
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+
+# Python cache
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Tool configs
+.commandcode/
+.opencode/
+.agents/
+.claude/
+.codex/
+
+# Local scratch files
+_run*.py
+_run*.sh
+IMPLEMENTATION_PLAN.md
+QA_BUG_REPORT.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

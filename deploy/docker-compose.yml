@@ -1,0 +1,243 @@
+# TrafficFlow Production Stack
+#
+# Services:
+#   redis     — Pub/Sub message bus (AI worker → backend → WebSocket)
+#   postgres  — Primary database (events, aggregates, jobs, cameras)
+#   api       — FastAPI backend + WebSocket server
+#   worker    — AI inference: YOLO + ByteTrack + lane counting
+#   dashboard — Streamlit Command Center (served via nginx on :80)
+#   nginx     — Reverse proxy: / → dashboard, /api → api, /ws → api WebSocket
+#
+# Profiles:
+#   default   — all services on CPU
+#   gpu       — worker uses NVIDIA runtime (requires nvidia-container-toolkit)
+#
+# Quick start (CPU):
+#   cp deploy/.env.example deploy/.env
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# Quick start (GPU):
+#   docker compose -f deploy/docker-compose.yml --profile gpu up --build
+
+name: trafficflow
+
+services:
+
+  # ── Message bus ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: trafficflow_redis
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Primary database ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: trafficflow_postgres
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trafficflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trafficflow_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-trafficflow}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - trafficflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trafficflow} -d ${POSTGRES_DB:-trafficflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI backend + WebSocket ────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    container_name: trafficflow_api
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trafficflow}:${POSTGRES_PASSWORD:-trafficflow_secret}@postgres:5432/${POSTGRES_DB:-trafficflow}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OUTPUT_DIR: /app/outputs
+      CAMERAS_DIR: /app/configs/cameras
+      MAX_WORKERS: ${MAX_WORKERS:-2}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../outputs:/app/outputs
+      - ../storage:/app/storage
+      - ../logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── AI inference worker (CPU) ──────────────────────────────────────────────
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    container_name: trafficflow_worker
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_BASE_URL: http://api:8000
+      MODEL_PATH: /app/weights/${MODEL_FILE:-yolo11s.pt}
+      CAMERAS_DIR: /app/configs/cameras
+      DETECT_EVERY_N_FRAMES: ${DETECT_EVERY_N_FRAMES:-2}
+      HALF_PRECISION: "false"   # no GPU in default profile
+    volumes:
+      - ../weights:/app/weights:ro
+      - ../configs:/app/configs:ro
+      - ../storage:/app/storage
+      - ../outputs:/app/outputs
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-4g}
+          cpus: ${WORKER_CPU_LIMIT:-2.0}
+        reservations:
+          memory: ${WORKER_MEM_RESERVE:-1g}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    profiles: ["", "cpu"]
+
+  # ── AI inference worker (GPU) ──────────────────────────────────────────────
+  worker-gpu:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    container_name: trafficflow_worker_gpu
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_BASE_URL: http://api:8000
+      MODEL_PATH: /app/weights/${MODEL_FILE:-yolo11s.pt}
+      CAMERAS_DIR: /app/configs/cameras
+      DETECT_EVERY_N_FRAMES: ${DETECT_EVERY_N_FRAMES:-2}
+      HALF_PRECISION: "true"
+    volumes:
+      - ../weights:/app/weights:ro
+      - ../configs:/app/configs:ro
+      - ../storage:/app/storage
+      - ../outputs:/app/outputs
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-4g}
+          cpus: ${WORKER_CPU_LIMIT:-2.0}
+        reservations:
+          memory: ${WORKER_MEM_RESERVE:-1g}
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles: ["gpu"]
+
+  # ── Streamlit dashboard ────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.dashboard
+    container_name: trafficflow_dashboard
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    # Not exposed directly — nginx proxies to it on port 80
+    expose:
+      - "3000"
+
+  # ── Nginx reverse proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: trafficflow_nginx
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - dashboard
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  trafficflow_pgdata:
+    name: trafficflow_pgdata

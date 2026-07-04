@@ -1,0 +1,32 @@
+Metadata-Version: 2.4
+Name: trafficflow
+Version: 1.0.0
+Requires-Python: >=3.10
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: PyYAML
+Requires-Dist: tqdm
+Requires-Dist: ultralytics
+Requires-Dist: fastapi
+Requires-Dist: uvicorn[standard]
+Requires-Dist: pydantic
+Requires-Dist: sqlalchemy
+Requires-Dist: python-multipart
+Requires-Dist: streamlit
+Requires-Dist: requests
+Requires-Dist: pandas
+Requires-Dist: psycopg2-binary
+Requires-Dist: redis>=5.0
+Requires-Dist: alembic
+Requires-Dist: defusedxml
+Requires-Dist: python-jose[cryptography]
+Requires-Dist: httpx
+Requires-Dist: slowapi
+Requires-Dist: yt-dlp>=2023.0
+Provides-Extra: dev
+Requires-Dist: httpx; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: pre-commit; extra == "dev"
+Requires-Dist: types-requests; extra == "dev"
+Requires-Dist: types-PyYAML; extra == "dev"

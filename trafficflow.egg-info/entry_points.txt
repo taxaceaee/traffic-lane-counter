@@ -1,0 +1,5 @@
+[console_scripts]
+import-jsonl = scripts.import_jsonl:main
+run-benchmark = scripts.run_benchmark:main
+run-occupancy = scripts.run_occupancy:main
+seed-db = scripts.seed_db:main

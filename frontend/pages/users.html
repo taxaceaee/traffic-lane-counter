@@ -1,0 +1,43 @@
+    <div id="page-content-users" class="tab-content hidden space-y-6">
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <div class="flex justify-between items-center mb-5">
+                <h3 class="text-base font-bold text-white">User Registry</h3>
+                <button id="btn-add-user" onclick="showAddUserForm()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+                    <i data-lucide="plus" class="h-4 w-4"></i> Add User
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left text-slate-400">
+                    <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800">
+                        <tr>
+                            <th class="px-4 py-3 font-semibold">Username</th>
+                            <th class="px-4 py-3 font-semibold">Email</th>
+                            <th class="px-4 py-3 font-semibold">Role</th>
+                            <th class="px-4 py-3 font-semibold">Status</th>
+                            <th class="px-4 py-3 font-semibold">Last Login</th>
+                            <th class="px-4 py-3 font-semibold">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <h3 class="text-base font-bold text-white mb-5">Audit Log</h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left text-slate-400">
+                    <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800">
+                        <tr>
+                            <th class="px-4 py-3 font-semibold">Timestamp</th>
+                            <th class="px-4 py-3 font-semibold">User</th>
+                            <th class="px-4 py-3 font-semibold">Action</th>
+                            <th class="px-4 py-3 font-semibold">Resource</th>
+                            <th class="px-4 py-3 font-semibold">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>

@@ -1,0 +1,27 @@
+models:
+  - model_id: yolo11n_coco
+    path: yolo11n.pt
+    class_mode: coco_pretrained
+    description: YOLO11n COCO-pretrained (nano, ~6MB, fastest). Lightweight for high-fps/low-GPU.
+  - model_id: yolo11s_coco
+    path: yolo11s.pt
+    class_mode: coco_pretrained
+    description: YOLO11s COCO-pretrained (small, ~18MB). Good balance of speed & accuracy.
+  - model_id: yolo11m_coco
+    path: yolo11m.pt
+    class_mode: coco_pretrained
+    description: YOLO11m COCO-pretrained (medium, ~40MB). Better accuracy, moderate speed.
+  - model_id: yolo11l_coco
+    path: yolo11l.pt
+    class_mode: coco_pretrained
+    description: YOLO11l COCO-pretrained (large, ~90MB). High accuracy, slower.
+  - model_id: yolo11x_coco
+    path: yolo11x.pt
+    class_mode: coco_pretrained
+    description: YOLO11x COCO-pretrained (x-large, ~170MB). Best accuracy, slowest.
+
+preload:
+  enabled: false
+  models:
+    - yolo11s_coco
+    - yolo11n_coco

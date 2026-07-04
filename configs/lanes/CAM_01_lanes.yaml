@@ -1,0 +1,17 @@
+camera_id: CAM_01
+coordinate_space: original_frame
+frame_size:
+  width: 960
+  height: 540
+lanes:
+- lane_id: lane_no_cl
+  name: ''
+  polygon:
+  - - 0.0
+    - 0.0
+  - - 200.0
+    - 0.0
+  - - 200.0
+    - 200.0
+  - - 0.0
+    - 200.0

@@ -1,0 +1,64 @@
+frame_size:
+  width: 960
+  height: 540
+coordinate_space: original_frame
+
+detector:
+  weights: yolo11s.pt
+  imgsz: 960
+  conf: 0.35
+  iou: 0.5
+  class_mode: coco_pretrained
+  # COCO pretrained allowed classes for vehicles
+  allowed_classes: ["car", "bus", "truck"]
+
+tracking:
+  tracker: bytetrack.yaml
+  active_track_timeout_frames: 10
+  min_track_age_frames: 3
+
+lane_assignment:
+  boundary_mode: inside_or_on_edge
+  unknown_policy: keep_last_stable
+  unknown_timeout_frames: 15
+
+smoothing:
+  method: hybrid
+  history_window: 10
+  min_consecutive_for_change: 5
+
+output:
+  save_video: true
+  save_jsonl: true
+  save_csv: true
+  video_fps_mode: source
+
+# Line-crossing counting parameters. Defaults are reasonable;
+# tune min_cross_distance_px upward if stopped vehicles trigger false counts.
+counting:
+  min_cross_distance_px: 2.0
+  count_unstable_lane: true
+
+# Each lane MAY define a counting_line. A vehicle is counted when its bottom-center
+# crosses the line, with direction determined by which side `direction_ref` is on
+# (forward = away from direction_ref). Coordinates are placeholders — draw real
+# lines for your camera before relying on the counts.
+lanes:
+  - id: lane_1
+    points: [[400, 540], [450, 100], [550, 100], [530, 540]]
+    counting_line:
+      start: [410, 400]
+      end:   [540, 400]
+      direction_ref: [475, 540]
+  - id: lane_2
+    points: [[530, 540], [550, 100], [680, 100], [750, 540]]
+    counting_line:
+      start: [550, 400]
+      end:   [730, 400]
+      direction_ref: [640, 540]
+  - id: lane_3
+    points: [[750, 540], [680, 100], [850, 100], [960, 540]]
+    counting_line:
+      start: [750, 400]
+      end:   [930, 400]
+      direction_ref: [840, 540]

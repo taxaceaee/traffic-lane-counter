@@ -1,0 +1,377 @@
+let BASE_URL = 'http://localhost:8000';
+let activeTab = 'dashboard';
+let camerasList = [], modelsList = [], jobsList = [];
+const _loadedPages = new Set();
+
+// Live session state
+let _sessionCounts = {};
+let _ws = null;
+let _wsReconnectTimer = null;
+let _liveMetricsTimer = null;
+let _lastLiveCam = null;
+
+// Health dashboard state
+let _healthTimer = null;
+let _healthHistory = [];
+
+// ApexCharts instances
+let chartHourly = null, chartVehicleTypes = null, chartMetrics = null;
+let chartVolumes = null, chartAverages = null, chartHeatmap = null, chartCountingLanes = null;
+
+// ── Route map: tabId → clean URL path ────────────────────────────────────
+const ROUTE_MAP = {
+    dashboard: '/',
+    live: '/live',
+    counting: '/counting',
+    alerts: '/alerts',
+    cameras: '/cameras',
+    lanes: '/lanes',
+    jobs: '/jobs',
+    models: '/models',
+    analytics: '/analytics',
+    events: '/events',
+    reports: '/reports',
+    health: '/health',
+    users: '/users',
+    settings: '/settings',
+};
+
+function urlForTab(tabId) {
+    return ROUTE_MAP[tabId] || '/' + tabId;
+}
+
+function tabFromPath(pathname) {
+    if (!pathname || pathname === '/') return 'dashboard';
+    const segment = pathname.replace(/^\/|\/$/g, '').split('/')[0];
+    for (const [tabId, url] of Object.entries(ROUTE_MAP)) {
+        if (url === '/' + segment) return tabId;
+    }
+    return 'dashboard';
+}
+
+// ── Page loading ──────────────────────────────────────────────────────────
+
+async function loadPage(tabId) {
+    const container = document.getElementById('page-content-area');
+    if (!container) return;
+    // Remove cached content so fresh HTML always loads
+    const existing = document.getElementById('page-content-' + tabId);
+    if (existing) existing.remove();
+    _loadedPages.delete(tabId);
+    try {
+        const htmlResp = await fetch(`pages/${tabId}.html?t=${Date.now()}`);
+        if (!htmlResp.ok) throw new Error('HTTP ' + htmlResp.status);
+        const html = await htmlResp.text();
+        container.insertAdjacentHTML('beforeend', html);
+        _loadedPages.add(tabId);
+        lucide.createIcons();
+    } catch (e) {
+        console.warn(`Failed to load page "${tabId}":`, e);
+    }
+}
+
+function loadPageScript(tabId) {
+    // No-op: app.js is a pre-concatenated bundle of core + all page scripts.
+    // All code runs in the same module scope, so dynamic re-injection would
+    // cause 'const' / 'let' redeclaration errors.
+}
+
+// ── Routing ───────────────────────────────────────────────────────────────
+
+window.onload = async function() {
+    const savedUrl = localStorage.getItem('api_url');
+    if (savedUrl) { BASE_URL = savedUrl; const el = document.getElementById('settings-api-url'); if (el) el.value = BASE_URL; }
+    lucide.createIcons();
+    const tab = tabFromPath(window.location.pathname);
+    await switchTab(tab);
+};
+
+window.addEventListener('popstate', () => {
+    const tab = tabFromPath(window.location.pathname);
+    if (tab !== activeTab) switchTab(tab);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+    console.error('Unhandled rejection:', event.reason);
+    if (typeof showToast === 'function') {
+        showToast({severity: 'critical', title: 'System Error', message: 'An unexpected error occurred. Please refresh.'});
+    }
+});
+
+async function switchTab(tabId) {
+    activeTab = tabId;
+    const isNewPage = !_loadedPages.has(tabId);
+
+    const targetPath = urlForTab(tabId);
+    if (window.location.pathname !== targetPath) {
+        history.pushState(null, '', targetPath);
+    }
+
+    await loadPage(tabId);
+
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('nav-active'));
+
+    const target = document.getElementById('page-content-' + tabId);
+    if (target) target.classList.remove('hidden');
+    const btn = document.getElementById('btn-' + tabId);
+    if (btn) btn.classList.add('nav-active');
+
+    document.title = 'TrafficFlow — ' + (tabId.charAt(0).toUpperCase() + tabId.slice(1));
+
+    if (isNewPage) {
+        await refreshData();
+    }
+
+    if (tabId === 'dashboard') {
+        await renderDashboardCharts();
+    }
+
+    updatePageHeader(tabId);
+
+    if (tabId === 'alerts') { await refreshAlerts(); }
+    if (tabId === 'health') { startHealthPolling(); }
+    if (tabId === 'analytics') { loadAnalyticsData(); }
+    if (tabId === 'counting') { applyCountingFilter(); }
+    if (tabId === 'reports') { loadReportsData(); }
+    if (tabId === 'events') { loadEventsData(); }
+    if (tabId === 'settings') { loadSettings(); }
+    if (tabId === 'users') { loadCurrentUserRole(); loadUsersData(); loadAuditData(); }
+    if (tabId === 'live') {
+        // loadLiveCameraData is already called by refreshData() on first visit.
+        // For re-visits (isNewPage=false), refreshData() is skipped so we call it here.
+        if (!isNewPage) {
+            if (camerasList.length) {
+                populateSelectors();
+                loadLiveCameraData();
+            } else {
+                await refreshData();
+            }
+        }
+    }
+    if (tabId === 'lanes') {
+        // Ensure cameras data is available even if page was cached
+        if (!camerasList.length) await refreshData();
+        loadLanesConfigEditor();
+    }
+
+    if (tabId !== 'health') { stopHealthPolling(); }
+}
+
+function updatePageHeader(tabId) {
+    const headers = {
+        dashboard: ["Dashboard", "Traffic overview — today's KPIs, trends, and top cameras."],
+        live:      ["Live Monitoring", "Real-time annotated video, lane occupancy, and AI inference metrics."],
+        counting:  ["Vehicle Counting", "Count vehicles by lane, type, camera and time range. Export CSV."],
+        alerts:    ["Alert System", "Active alerts and historical notification log."],
+        cameras:   ["Camera Management", "Register, configure and inspect camera sources."],
+        lanes:     ["Lane Configuration", "Edit lane polygon coordinates and counting lines per camera."],
+        jobs:      ["Inference Jobs", "Launch and monitor video inference jobs."],
+        models:    ["Model Management", "Review registered YOLO detection models and parameters."],
+        analytics: ["Traffic Analytics", "Density heatmap, volume trends, and occupancy statistics."],
+        events:    ["Lane-change Events", "Full log of vehicle lane-change events."],
+        reports:   ["Reports", "Benchmark evaluation metrics: mAP, IDF1, counting accuracy."],
+        health:    ["System Health", "API, database, GPU, and worker node status."],
+        users:     ["Users & Audit", "User management and administration audit trail."],
+        settings:  ["Settings", "API connection, AI model parameters, and output configuration."]
+    };
+    if (headers[tabId]) {
+        document.getElementById('page-title').innerText = headers[tabId][0];
+        document.getElementById('page-subtitle').innerText = headers[tabId][1];
+    }
+}
+
+// ── API Client ────────────────────────────────────────────────────────────
+
+async function apiRequest(path, options = {}) {
+    try {
+        const token = localStorage.getItem('access_token');
+        const headers = options.headers || {};
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        const res = await fetch(BASE_URL + path, { ...options, headers });
+
+        if (res.status === 401 && token) {
+            const refreshed = await refreshToken();
+            if (refreshed) {
+                headers['Authorization'] = 'Bearer ' + localStorage.getItem('access_token');
+                const retry = await fetch(BASE_URL + path, { ...options, headers });
+                if (retry.ok) return await retry.json();
+            } else {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('refresh_token');
+                showToast({severity: 'warning', title: 'Session Expired', message: 'Please log in again.'});
+                return null;
+            }
+        }
+
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+    } catch (e) { return null; }
+}
+
+async function apiRequestWithHeaders(path, headers = {}) {
+    try {
+        const res = await fetch(BASE_URL + path, { headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+    } catch (e) { return null; }
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────
+
+function destroyChart(ref) { if (ref) { try { ref.destroy(); } catch(e){} } return null; }
+
+function clearContainer(id) {
+    const el = document.querySelector(id);
+    if (el) el.innerHTML = '';
+}
+
+function populateSelectors() {
+    const camOpts = camerasList.map(c => `<option value="${c.camera_id}">${c.camera_id} — ${c.name}</option>`).join('');
+    const modelOpts = modelsList.map(m => `<option value="${m.model_id}">${m.model_id}</option>`).join('');
+    ['overview-cam-select','live-cam-select','lanes-cam-select','analytics-cam-select'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = camOpts;
+    });
+    const cf = document.getElementById('count-filter-camera');
+    if (cf) cf.innerHTML = '<option value="">— Select camera —</option>' + camOpts;
+    const om = document.getElementById('overview-model-select');
+    if (om) om.innerHTML = modelOpts;
+}
+
+// ── Data refresh (called once per page-load / manual refresh) ─────────────
+
+async function refreshData() {
+    const now = new Date();
+    document.getElementById('last-refresh-time').innerText = 'Last sync: ' + now.toLocaleTimeString();
+
+    const health = await apiRequest('/api/health');
+    const connBadge = document.getElementById('conn-badge');
+    if (!health) {
+        connBadge.innerText = 'OFFLINE';
+        connBadge.className = 'text-[9px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20';
+        showConnectionError();
+        return;
+    }
+    connBadge.innerText = 'ONLINE';
+    connBadge.className = 'text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+    const gpuBadge = document.getElementById('health-gpu-badge');
+    const gpuText = document.getElementById('health-gpu-text');
+    const gpuInfo = health && health.dependencies && health.dependencies.gpu;
+    if (gpuBadge && gpuInfo && gpuInfo.available) {
+        gpuBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+        gpuBadge.innerText = '● ONLINE';
+        if (gpuText) gpuText.innerText = gpuInfo.name || 'GPU Active';
+    }
+
+    const [cams, models, jobs] = await Promise.all([
+        apiRequest('/api/cameras'),
+        apiRequest('/api/models'),
+        apiRequest('/api/jobs'),
+    ]);
+    camerasList = cams || [];
+    modelsList = models || [];
+    jobsList = jobs || [];
+
+    if (!cams || !models || !jobs) {
+        showPartialError('Some data sources are unavailable');
+    }
+
+    const kpiActiveCameras = document.getElementById('kpi-active-cameras');
+    if (kpiActiveCameras) kpiActiveCameras.innerText = cams ? cams.filter(c => c.status === 'configured').length : '—';
+    const kpiCamerasSub = document.getElementById('kpi-cameras-sub');
+    if (kpiCamerasSub) kpiCamerasSub.innerText = (cams ? cams.length : 0) + ' total registered';
+
+    updateAlertBadge();
+
+    populateSelectors();
+    renderJobsTable();
+    renderCamerasGrid();
+    renderModelsList();
+    loadEventsData();
+    loadLiveCameraData();
+}
+
+async function fullRefresh() {
+    await refreshData();
+    if (activeTab === 'dashboard') await renderDashboardCharts();
+    if (activeTab === 'alerts') await refreshAlerts();
+    if (activeTab === 'health') fetchHealthData();
+}
+
+// ── Connection Error UI ─────────────────────────────────────────────────
+
+function showConnectionError() {
+    const area = document.getElementById('page-content-area');
+    if (!area) return;
+    area.innerHTML = `
+        <div class="flex flex-col items-center justify-center py-20">
+            <i data-lucide="wifi-off" class="h-16 w-16 text-rose-500 mb-4"></i>
+            <h2 class="text-xl font-bold text-white mb-2">Connection Lost</h2>
+            <p class="text-slate-400 mb-6">Unable to reach the server at ${BASE_URL}</p>
+            <button onclick="fullRefresh()" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition-all">
+                Retry Connection
+            </button>
+        </div>
+    `;
+    lucide.createIcons();
+}
+
+function showPartialError(msg) {
+    showToast({severity: 'warning', title: 'Data Issue', message: msg});
+}
+
+// ── Shared helpers ──────────────────────────────────────────────────────
+
+async function downloadCSVLogs() {
+    const camera_id = document.getElementById('events-cam-select')?.value;
+    if (!camera_id) { showToast({severity:'warning', title:'No Camera', message:'Select a camera first to export real events.'}); return; }
+    const url = BASE_URL + `/api/cameras/${camera_id}/lane-changes?limit=10000`;
+    try {
+        const r = await fetch(url, {headers: {'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '')}});
+        if (!r.ok) { showToast({severity:'warning', title:'Export Failed', message:'HTTP ' + r.status}); return; }
+        const data = await r.json();
+        if (!data || !data.length) { showToast({severity:'info', title:'No Data', message:'No events to export.'}); return; }
+        let csv = 'event_id,camera_id,track_id,class_name,from_lane,to_lane,frame_id\n';
+        data.forEach(e => { csv += e.id + ',' + e.camera_id + ',' + e.track_id + ',' + (e.class_name||'') + ',' + (e.previous_lane_id||'') + ',' + (e.current_lane_id||'') + ',' + e.frame_id + '\n'; });
+        const blob = new Blob([csv], {type:'text/csv'});
+        const a = document.createElement('a');
+        a.href = window.URL.createObjectURL(blob);
+        a.download = camera_id + '_events_export.csv';
+        a.click();
+    } catch (e) { showToast({severity:'warning', title:'Export Error', message:e.message}); }
+}
+
+function showAddCameraModal() {
+    if (typeof showAddCameraForm === 'function') {
+        showAddCameraForm();
+    } else {
+        alert('Add Camera dialog loading...');
+    }
+}
+
+async function doLogout() {
+    await apiRequest('/api/auth/logout', { method: 'POST' });
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    window.location.reload();
+}
+
+async function refreshToken() {
+    const refresh = localStorage.getItem('refresh_token');
+    if (!refresh) return false;
+    try {
+        const res = await fetch(BASE_URL + '/api/auth/refresh', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({refresh_token: refresh})
+        });
+        if (res.ok) {
+            const data = await res.json();
+            localStorage.setItem('access_token', data.access_token);
+            localStorage.setItem('refresh_token', data.refresh_token);
+            return true;
+        }
+    } catch(e) {}
+    return false;
+}

@@ -1,0 +1,63 @@
+[project]
+name = "trafficflow"
+version = "1.0.0"
+description = "TrafficFlow — vision-based real-time per-lane vehicle counting (meta package)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "PyYAML",
+    "tqdm",
+    "ultralytics",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "sqlalchemy",
+    "python-multipart",
+    "streamlit",
+    "requests",
+    "pandas",
+    "psycopg2-binary",
+    "redis>=5.0",
+    "alembic",
+    "defusedxml",
+    "python-jose[cryptography]",
+    "httpx",
+    "slowapi",
+    "yt-dlp>=2023.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_core*", "tf_common*", "tf_db*", "tf_api*", "tf_worker*", "trafficflow*", "scripts*"]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "types-requests",
+    "types-PyYAML",
+]
+
+[project.scripts]
+run-benchmark = "scripts.run_benchmark:main"
+run-occupancy = "scripts.run_occupancy:main"
+import-jsonl = "scripts.import_jsonl:main"
+seed-db = "scripts.seed_db:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S", "ASYNC"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["ultralytics.*", "cv2", "torch.*"]
+ignore_missing_imports = true

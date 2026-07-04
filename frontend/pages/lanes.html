@@ -1,0 +1,161 @@
+    <div id="page-content-lanes" class="tab-content hidden space-y-6">
+        <!-- Toolbar row -->
+        <div class="flex flex-wrap items-center gap-3">
+            <label class="text-xs font-semibold uppercase text-slate-500">Camera</label>
+            <select id="lanes-cam-select" onchange="loadLanesConfigEditor()" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+            </select>
+
+            <!-- Mode toggle: Detection Zone vs Lane -->
+            <div class="flex bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+                <button id="mode-btn-zones" onclick="setEditorMode('zones')" class="px-3 py-1.5 text-xs font-medium transition-all bg-indigo-600/20 text-indigo-400 border-r border-slate-800">
+                    <i data-lucide="crop" class="h-3.5 w-3.5 inline mr-1"></i>Zones
+                </button>
+                <button id="mode-btn-lanes" onclick="setEditorMode('lanes')" class="px-3 py-1.5 text-xs font-medium transition-all text-slate-400 hover:text-slate-200">
+                    <i data-lucide="activity" class="h-3.5 w-3.5 inline mr-1"></i>Lanes
+                </button>
+            </div>
+
+            <div class="w-px h-6 bg-slate-800"></div>
+            <button id="btn-zone-add" onclick="startAddZone()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 border border-indigo-500/20 transition-all">
+                <i data-lucide="plus" class="h-3.5 w-3.5"></i> Add Zone
+            </button>
+            <button id="btn-zone-delete" onclick="deleteSelectedZone()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed" disabled>
+                <i data-lucide="trash-2" class="h-3.5 w-3.5"></i> Delete Zone
+            </button>
+            <button id="btn-lane-add" onclick="startAddLane()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 border border-indigo-500/20 transition-all hidden">
+                <i data-lucide="plus" class="h-3.5 w-3.5"></i> Add Lane
+            </button>
+            <button id="btn-lane-delete" onclick="deleteSelectedLane()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed hidden" disabled>
+                <i data-lucide="trash-2" class="h-3.5 w-3.5"></i> Delete
+            </button>
+            <button id="btn-lane-undo" onclick="undoLastPoint()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-700 border border-slate-700 transition-all disabled:opacity-30 disabled:cursor-not-allowed" disabled>
+                <i data-lucide="undo-2" class="h-3.5 w-3.5"></i> Undo Point
+            </button>
+            <div class="w-px h-6 bg-slate-800"></div>
+            <span id="lane-status-text" class="text-xs text-slate-500 italic">Select mode: Zones or Lanes</span>
+        </div>
+
+        <!-- Editor row -->
+        <div class="flex gap-4">
+            <!-- Canvas area (takes max space) -->
+            <div class="flex-1 bg-slate-900/40 border border-slate-800 rounded-xl p-4 min-w-0">
+                <div class="relative w-full" id="canvas-wrapper">
+                    <canvas id="lanes-canvas" class="rounded-lg border border-slate-700 cursor-crosshair w-full"
+                            style="min-height:450px;"></canvas>
+                    <div id="canvas-tooltip" class="absolute pointer-events-none bg-slate-900/90 text-xs text-slate-300 px-2 py-1 rounded border border-slate-700 hidden"></div>
+                    <div id="placeholder-badge" class="absolute top-3 left-3 hidden flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                        <i data-lucide="image-off" class="h-3 w-3"></i> Placeholder — no live snapshot
+                    </div>
+                </div>
+            </div>
+
+            <!-- Side panel (fixed width) -->
+            <div class="w-72 bg-slate-900/40 border border-slate-800 rounded-xl p-4 flex flex-col gap-3 flex-shrink-0">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-xs font-bold uppercase text-slate-500 tracking-wider" id="side-panel-title">Zones</h3>
+                    <span id="zone-count-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400">0</span>
+                    <span id="lane-count-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 hidden">0</span>
+                </div>
+
+                <!-- Zone detail panel -->
+                <div id="zone-detail-panel" class="hidden bg-slate-950/80 border border-slate-700/50 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-[10px] font-bold uppercase text-slate-500">Selected Zone</label>
+                        <span id="zone-detail-order" class="text-[10px] text-slate-600 font-mono">#0</span>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 block mb-0.5">Zone ID</label>
+                        <input id="zone-detail-id" type="text"
+                               class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                               onchange="updateSelectedZoneDetail()">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 block mb-0.5">Name</label>
+                        <input id="zone-detail-name" type="text" placeholder="e.g. Highway Area"
+                               class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                               onchange="updateSelectedZoneDetail()">
+                    </div>
+                    <div class="flex gap-2 pt-1">
+                        <button onclick="moveZoneUp()" class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 border border-slate-700 transition-all">
+                            <i data-lucide="arrow-up" class="h-3 w-3"></i> Move Up
+                        </button>
+                        <button onclick="moveZoneDown()" class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 border border-slate-700 transition-all">
+                            <i data-lucide="arrow-down" class="h-3 w-3"></i> Move Down
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Lane detail panel -->
+                <div id="lane-detail-panel" class="hidden bg-slate-950/80 border border-slate-700/50 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-[10px] font-bold uppercase text-slate-500">Selected Lane</label>
+                        <span id="lane-detail-order" class="text-[10px] text-slate-600 font-mono">#0</span>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 block mb-0.5">Lane ID</label>
+                        <input id="lane-detail-id" type="text"
+                               class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                               onchange="updateSelectedLaneDetail()">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 block mb-0.5">Name</label>
+                        <input id="lane-detail-name" type="text" placeholder="e.g. Left Turn Lane"
+                               class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                               onchange="updateSelectedLaneDetail()">
+                    </div>
+                    <div class="flex gap-2 pt-1">
+                        <button onclick="moveLaneUp()" class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 border border-slate-700 transition-all">
+                            <i data-lucide="arrow-up" class="h-3 w-3"></i> Move Up
+                        </button>
+                        <button onclick="moveLaneDown()" class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 border border-slate-700 transition-all">
+                            <i data-lucide="arrow-down" class="h-3 w-3"></i> Move Down
+                        </button>
+                    </div>
+                </div>
+
+                <div id="lanes-list" class="flex-1 space-y-1.5 overflow-y-auto max-h-72"></div>
+                <div class="border-t border-slate-800 pt-3">
+                    <button id="btn-save-zones" onclick="saveZonesConfig()" class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+                        <i data-lucide="save" class="h-4 w-4"></i> Save Zones
+                    </button>
+                    <button id="btn-save-lanes" onclick="saveLanesConfig()" class="w-full hidden items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+                        <i data-lucide="save" class="h-4 w-4"></i> Save Lanes
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Counting line config -->
+        <div id="counting-line-panel" class="bg-slate-900/40 border border-slate-800 rounded-xl p-4 hidden">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-xs font-bold uppercase text-slate-500 tracking-wider">Counting Line</h3>
+                <label class="flex items-center gap-2 text-xs text-slate-400">
+                    <input type="checkbox" id="counting-line-toggle" onchange="toggleCountingLine()" class="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-indigo-500/30">
+                    Enable counting line
+                </label>
+            </div>
+            <div class="grid grid-cols-3 gap-4 text-xs">
+                <div>
+                    <label class="text-slate-500 block mb-1">Start (x, y)</label>
+                    <div class="flex gap-2">
+                        <input id="cl-start-x" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="x" onchange="updateCountingLineFromInputs()">
+                        <input id="cl-start-y" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="y" onchange="updateCountingLineFromInputs()">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-slate-500 block mb-1">End (x, y)</label>
+                    <div class="flex gap-2">
+                        <input id="cl-end-x" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="x" onchange="updateCountingLineFromInputs()">
+                        <input id="cl-end-y" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="y" onchange="updateCountingLineFromInputs()">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-slate-500 block mb-1">Direction Ref (x, y)</label>
+                    <div class="flex gap-2">
+                        <input id="cl-ref-x" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="x" onchange="updateCountingLineFromInputs()">
+                        <input id="cl-ref-y" type="number" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200" placeholder="y" onchange="updateCountingLineFromInputs()">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>

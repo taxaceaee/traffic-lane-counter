@@ -1,0 +1,15 @@
+**/.venv
+**/__pycache__
+**/*.pyc
+datasets/
+outputs/
+logs/
+uploads/
+*.pt
+*.onnx
+*.engine
+.git
+trafficflow.db
+*.sqlite3
+.env
+deploy/.env

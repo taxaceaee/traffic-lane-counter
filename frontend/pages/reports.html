@@ -1,0 +1,87 @@
+    <div id="page-content-reports" class="tab-content hidden space-y-6">
+        <div class="flex items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-3">
+                <label class="text-xs font-semibold uppercase text-slate-500">Camera</label>
+                <select id="reports-cam-select" onchange="loadReportsData()" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"></select>
+            </div>
+            <div class="flex items-center gap-3">
+                <label class="text-xs font-semibold uppercase text-slate-500">From</label>
+                <input id="reports-filter-from" type="date" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+            </div>
+            <div class="flex items-center gap-3">
+                <label class="text-xs font-semibold uppercase text-slate-500">To</label>
+                <input id="reports-filter-to" type="date" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+            </div>
+            <button onclick="loadReportsData()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+                <i data-lucide="search" class="h-4 w-4"></i> Apply
+            </button>
+            <button onclick="exportReportsCSV()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border border-slate-700 bg-slate-900 hover:border-slate-600 text-slate-300 transition-all ml-auto">
+                <i data-lucide="download" class="h-4 w-4"></i> Export CSV
+            </button>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4" id="reports-kpi-row">
+            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
+                <p class="text-xs text-slate-500 mb-1">Total Vehicles</p>
+                <p class="text-2xl font-extrabold text-white" id="report-total-vehicles">0</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
+                <p class="text-xs text-slate-500 mb-1">Cars</p>
+                <p class="text-2xl font-extrabold text-indigo-400" id="report-total-cars">0</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
+                <p class="text-xs text-slate-500 mb-1">Motorcycles</p>
+                <p class="text-2xl font-extrabold text-emerald-400" id="report-total-motos">0</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
+                <p class="text-xs text-slate-500 mb-1">Trucks</p>
+                <p class="text-2xl font-extrabold text-amber-400" id="report-total-trucks">0</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
+                <p class="text-xs text-slate-500 mb-1">Buses</p>
+                <p class="text-2xl font-extrabold text-rose-400" id="report-total-buses">0</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="md:col-span-2 bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+                <h4 class="text-base font-bold text-white mb-4">Volume by Lane</h4>
+                <div id="chart-reports-volumes" class="overflow-hidden" style="min-height:280px"></div>
+            </div>
+            <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+                <h4 class="text-base font-bold text-white mb-4">Direction Split</h4>
+                <div id="chart-reports-direction" class="overflow-hidden" style="min-height:224px"></div>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h4 class="text-base font-bold text-white">Per-Lane Statistics</h4>
+                <span class="text-xs text-slate-500" id="reports-lane-count"></span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left text-slate-400">
+                    <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800">
+                        <tr>
+                            <th class="px-4 py-3 font-semibold">Lane ID</th>
+                            <th class="px-4 py-3 font-semibold">Lane Name</th>
+                            <th class="px-4 py-3 font-semibold">Cars</th>
+                            <th class="px-4 py-3 font-semibold">Motos</th>
+                            <th class="px-4 py-3 font-semibold">Trucks</th>
+                            <th class="px-4 py-3 font-semibold">Buses</th>
+                            <th class="px-4 py-3 font-semibold">Total</th>
+                            <th class="px-4 py-3 font-semibold">Forward</th>
+                            <th class="px-4 py-3 font-semibold">Backward</th>
+                            <th class="px-4 py-3 font-semibold">Occupancy</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reports-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <h4 class="text-base font-bold text-white mb-4">Occupancy per Lane</h4>
+            <div id="chart-reports-occupancy" class="overflow-hidden" style="min-height:224px"></div>
+        </div>
+    </div>

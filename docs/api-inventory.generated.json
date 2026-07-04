@@ -1,0 +1,33 @@
+{
+  "service": "TrafficFlow Backend",
+  "version": "0.2.0",
+  "base_url": "/api",
+  "endpoints": [
+    {"method": "POST", "path": "/api/auth/login", "auth": "public", "rate_limit": "none", "description": "JWT login"},
+    {"method": "POST", "path": "/api/auth/refresh", "auth": "public", "rate_limit": "none", "description": "Refresh token"},
+    {"method": "POST", "path": "/api/auth/logout", "auth": "public", "rate_limit": "none", "description": "Logout"},
+    {"method": "GET", "path": "/api/health", "auth": "public", "rate_limit": "200/min", "description": "Public health check"},
+    {"method": "GET", "path": "/api/cameras", "auth": "api_key", "rate_limit": "200/min", "description": "List cameras"},
+    {"method": "GET", "path": "/api/cameras/{id}", "auth": "api_key", "rate_limit": "200/min", "description": "Camera detail"},
+    {"method": "GET", "path": "/api/cameras/{id}/lanes", "auth": "api_key", "rate_limit": "200/min", "description": "Get lane config"},
+    {"method": "PUT", "path": "/api/cameras/{id}/lanes", "auth": "api_key", "rate_limit": "10/min", "description": "Update lane config (atomic write + file lock)"},
+    {"method": "GET", "path": "/api/cameras/{id}/occupancy/latest", "auth": "api_key", "rate_limit": "200/min", "description": "Latest occupancy"},
+    {"method": "GET", "path": "/api/cameras/{id}/occupancy", "auth": "api_key", "rate_limit": "200/min", "description": "Occupancy history"},
+    {"method": "GET", "path": "/api/cameras/{id}/lane-changes", "auth": "api_key", "rate_limit": "200/min", "description": "Lane change events"},
+    {"method": "GET", "path": "/api/cameras/{id}/counts/summary", "auth": "api_key", "rate_limit": "200/min", "description": "Counts summary"},
+    {"method": "GET", "path": "/api/cameras/{id}/counts/timeseries", "auth": "api_key", "rate_limit": "200/min", "description": "Counts time series"},
+    {"method": "GET", "path": "/api/cameras/{id}/counts/recent", "auth": "api_key", "rate_limit": "200/min", "description": "Recent counts"},
+    {"method": "POST", "path": "/api/infer/video", "auth": "api_key", "rate_limit": "10/min", "description": "Submit inference job"},
+    {"method": "GET", "path": "/api/jobs", "auth": "api_key", "rate_limit": "200/min", "description": "List jobs"},
+    {"method": "GET", "path": "/api/jobs/{id}", "auth": "api_key", "rate_limit": "200/min", "description": "Job detail"},
+    {"method": "GET", "path": "/api/jobs/{id}/video", "auth": "api_key", "rate_limit": "200/min", "description": "Job output video"},
+    {"method": "GET", "path": "/api/models", "auth": "api_key", "rate_limit": "200/min", "description": "List models"},
+    {"method": "POST", "path": "/detect/frame", "auth": "api_key", "rate_limit": "200/min", "description": "Single frame detection"},
+    {"method": "GET", "path": "/live/{id}/stream.mjpg", "auth": "none", "rate_limit": "200/min", "description": "MJPEG live stream"},
+    {"method": "WS", "path": "/ws/live", "auth": "jwt", "rate_limit": "10/min", "description": "WebSocket live events"},
+    {"method": "GET", "path": "/api/admin/health", "auth": "api_key+jwt_admin", "rate_limit": "10/min", "description": "Admin health detail"},
+    {"method": "GET", "path": "/api/admin/metrics", "auth": "api_key+jwt_admin", "rate_limit": "10/min", "description": "Admin Prometheus metrics"},
+    {"method": "GET", "path": "/api/metrics", "auth": "api_key", "rate_limit": "200/min", "description": "Metrics summary"},
+    {"method": "GET", "path": "/dashboard", "auth": "none", "rate_limit": "200/min", "description": "Frontend dashboard"}
+  ]
+}

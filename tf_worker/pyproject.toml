@@ -1,0 +1,18 @@
+[project]
+name = "tf-worker"
+version = "1.0.0"
+description = "TrafficFlow AI inference worker: YOLO + ByteTrack + lane counting + video processing"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "PyYAML",
+    "tqdm",
+    "ultralytics",
+    "yt-dlp>=2023.0",
+    "redis>=5.0",
+    "prometheus-client",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_worker*"]

@@ -1,0 +1,98 @@
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
+
+/* Apply global background and fonts */
+.stApp {
+    background-color: #0a0e1a !important;
+    font-family: 'Inter', sans-serif !important;
+    color: #e2e8f0 !important;
+}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background-color: #0f1424 !important;
+    border-right: 1px solid #1e293b !important;
+}
+
+/* Titles and headings styling */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', sans-serif !important;
+    font-weight: 600 !important;
+    color: #ffffff !important;
+}
+
+/* Custom card container class */
+.premium-card {
+    background-color: #111625;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    transition: all 0.2s ease-in-out;
+}
+
+.premium-card:hover {
+    border-color: #334155;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* State badges styling */
+.badge-online {
+    background-color: rgba(16, 185, 129, 0.15) !important;
+    color: #10b981 !important;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-warning {
+    background-color: rgba(245, 158, 11, 0.15) !important;
+    color: #f59e0b !important;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-critical {
+    background-color: rgba(239, 68, 68, 0.15) !important;
+    color: #ef4444 !important;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Sidebar list items */
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-radius: 8px;
+    color: #94a3b8;
+    text-decoration: none;
+    font-weight: 500;
+    margin-bottom: 4px;
+    transition: all 0.15s ease;
+}
+
+.sidebar-link.active {
+    background-color: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border-left: 3px solid #6366f1;
+}
+
+.sidebar-link:hover:not(.active) {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #f1f5f9;
+}
+
+/* Hide Streamlit default UI elements */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
