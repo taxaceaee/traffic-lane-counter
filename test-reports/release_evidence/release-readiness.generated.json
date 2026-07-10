@@ -1,0 +1,8 @@
+{
+  "generated_at": "2026-07-10",
+  "scope": "npm dev, API, frontend, worker, Docker Compose, nginx, Postgres, Redis",
+  "decision": "GO-WITH-RISK",
+  "passed": ["npm run dev fresh SQLite HTTP smoke", "npm default-port fallback smoke", "Chrome headless DOM and assets smoke", "offline worker 3-frame output smoke", "local compileall", "ruff", "frontend node --check", "20 pytest tests", "Docker API import", "Compose API/DB/Redis/nginx/worker HTTP smoke"],
+  "fixed_runtime_blockers": ["bcrypt/passlib incompatibility", "nginx regex proxy_pass", "browser API hostname", "worker volume permissions", "worker config compilation", "empty lane validation", "runtime lap installation", "false worker health status", "npm default-port collision", "worker compiled camera metadata"],
+  "open_gates": ["pytest-timeout not installed in local venv", "mypy 120 errors", "browser E2E", "offline worker persistence through API database", "backup/restore", "security/dependency scan", "Git object corruption"]
+}

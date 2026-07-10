@@ -1,0 +1,32 @@
+benchmark_name: detrac_baseline_v1
+sequences:
+  - sequence_id: MVI_20011
+    condition: sunny_unstable
+    source: datasets/DETRAC/DETRAC-Images/DETRAC-Images/MVI_20011
+    gt_xml: datasets/DETRAC/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_20011.xml
+    lane_config: configs/mvi_20011_config.yaml
+    fps: 25.0
+  - sequence_id: MVI_40181
+    condition: cloudy_stable
+    source: datasets/DETRAC/DETRAC-Images/DETRAC-Images/MVI_40181
+    gt_xml: datasets/DETRAC/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML/MVI_40181.xml
+    lane_config: configs/mvi_40181_config.yaml
+    fps: 25.0
+  - sequence_id: MVI_40864
+    condition: rainy_stable
+    source: datasets/DETRAC/DETRAC-Images/DETRAC-Images/MVI_40864
+    gt_xml: datasets/DETRAC/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40864.xml
+    lane_config: configs/mvi_40864_config.yaml
+    fps: 25.0
+  - sequence_id: MVI_40761
+    condition: night_unstable
+    source: datasets/DETRAC/DETRAC-Images/DETRAC-Images/MVI_40761
+    gt_xml: datasets/DETRAC/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40761.xml
+    lane_config: configs/mvi_40761_config.yaml
+    fps: 25.0
+  - sequence_id: MVI_40712
+    condition: cloudy_stable
+    source: datasets/DETRAC/DETRAC-Images/DETRAC-Images/MVI_40712
+    gt_xml: datasets/DETRAC/DETRAC-Test-Annotations-XML/DETRAC-Test-Annotations-XML/MVI_40712.xml
+    lane_config: configs/mvi_40712_config.yaml
+    fps: 25.0

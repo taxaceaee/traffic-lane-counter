@@ -1,0 +1,29 @@
+    <div id="page-content-analytics" class="tab-content hidden space-y-6">
+        <div class="flex items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-3">
+                <label class="text-xs font-semibold uppercase text-slate-500">Camera</label>
+                <select id="analytics-cam-select" onchange="loadAnalyticsData()" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"></select>
+            </div>
+            <div class="flex gap-1 ml-auto bg-slate-900 border border-slate-800 rounded-lg p-1">
+                <button onclick="setAnalyticsPeriod('day')" id="period-day" class="px-3 py-1.5 rounded text-xs font-semibold text-white bg-indigo-600">Day</button>
+                <button onclick="setAnalyticsPeriod('week')" id="period-week" class="px-3 py-1.5 rounded text-xs font-semibold text-slate-400 hover:text-white">Week</button>
+                <button onclick="setAnalyticsPeriod('month')" id="period-month" class="px-3 py-1.5 rounded text-xs font-semibold text-slate-400 hover:text-white">Month</button>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <h4 class="text-base font-bold text-white mb-4">Traffic Density Heatmap — Vehicles per Hour per Lane</h4>
+            <div id="chart-heatmap" class="overflow-hidden" style="min-height:280px"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+                <h4 class="text-base font-bold text-white mb-4">Volume per Lane</h4>
+                <div id="chart-analytics-volumes" class="overflow-hidden" style="min-height:224px"></div>
+            </div>
+            <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+                <h4 class="text-base font-bold text-white mb-4">Avg Occupancy per Lane</h4>
+                <div id="chart-analytics-occupancy" class="overflow-hidden" style="min-height:224px"></div>
+            </div>
+        </div>
+    </div>

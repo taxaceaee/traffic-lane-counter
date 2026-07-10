@@ -1,0 +1,76 @@
+[project]
+name = "trafficflow"
+version = "1.0.0"
+description = "TrafficFlow — vision-based real-time per-lane vehicle counting (meta package)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "PyYAML",
+    "tqdm",
+    "ultralytics",
+    "fastapi>=0.110,<0.111",
+    "uvicorn[standard]>=0.29,<0.31",
+    "pydantic",
+    "sqlalchemy",
+    "python-multipart",
+    "requests",
+    "pandas",
+    "psycopg2-binary",
+    "redis>=5.0",
+    "alembic>=1.13,<2.0",
+    "defusedxml",
+    "python-jose[cryptography]",
+    "httpx>=0.27,<0.28",
+    "anyio>=4.4,<4.10",
+    "slowapi",
+    "passlib[bcrypt]",
+    "bcrypt>=4.0,<4.1",
+    "prometheus-client",
+    "yt-dlp>=2023.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_core*", "tf_common*", "tf_db*", "tf_api*", "tf_worker*", "scripts*"]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27,<0.28",
+    "anyio>=4.4,<4.10",
+    "pytest-timeout>=2.2,<3.0",
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "types-requests",
+    "types-PyYAML",
+]
+
+[project.scripts]
+run-benchmark = "scripts.run_benchmark:main"
+benchmark-model = "scripts.benchmark_model:main"
+run-occupancy = "scripts.run_occupancy:main"
+import-jsonl = "scripts.import_jsonl:main"
+seed-db = "scripts.seed_db:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["legacy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S", "ASYNC"]
+# B008 is intentionally disabled for FastAPI's standard Depends/Query
+# declarations, which are evaluated once by the framework as route metadata.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S107"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["ultralytics.*", "cv2", "torch.*"]
+ignore_missing_imports = true

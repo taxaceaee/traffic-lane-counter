@@ -1,0 +1,12 @@
+[project]
+name = "tf-db"
+version = "1.0.0"
+description = "TrafficFlow database layer: SQLAlchemy models, session, repositories, storage protocols"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy",
+    "psycopg2-binary",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_db*"]

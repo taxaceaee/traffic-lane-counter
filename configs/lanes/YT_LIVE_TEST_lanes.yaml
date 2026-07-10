@@ -1,0 +1,30 @@
+camera_id: YT_LIVE_TEST
+coordinate_space: original_frame
+frame_size:
+  width: 1280
+  height: 720
+lanes:
+- lane_id: lane_1
+  name: ''
+  polygon:
+  - - 622.0
+    - 171.0
+  - - 5.0
+    - 380.0
+  - - 4.0
+    - 576.0
+  - - 751.0
+    - 169.0
+- lane_id: lane_2
+  name: ''
+  polygon:
+  - - 3.0
+    - 577.0
+  - - 4.0
+    - 708.0
+  - - 435.0
+    - 714.0
+  - - 829.0
+    - 168.0
+  - - 753.0
+    - 168.0

@@ -1,0 +1,21 @@
+camera_id: YT_LIVE_TEST_02
+coordinate_space: original_frame
+frame_size:
+  width: 1280
+  height: 720
+zones:
+- zone_id: zone_1
+  name: ''
+  polygon:
+  - - 549.0
+    - 162.0
+  - - 539.0
+    - 715.0
+  - - 1277.0
+    - 718.0
+  - - 1273.0
+    - 400.0
+  - - 1030.0
+    - 252.0
+  - - 802.0
+    - 157.0

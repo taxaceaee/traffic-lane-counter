@@ -1,0 +1,26 @@
+app:
+  name: trafficflow
+  environment: dev
+  api_host: 0.0.0.0
+  api_port: 8000
+
+database:
+  url: sqlite:///./data/trafficflow.db
+
+storage:
+  output_dir: outputs
+  upload_dir: uploads
+  log_dir: logs
+  config_dir: configs
+  weights_dir: weights
+
+retention:
+  crop_days: 7
+  event_days: 30
+  minute_agg_days: 180
+  daily_agg_days: 0
+
+runtime:
+  device: cpu
+  max_workers: 1
+  save_annotated_video: true

@@ -1,0 +1,16 @@
+[project]
+name = "tf-common"
+version = "1.0.0"
+description = "TrafficFlow cross-cutting utilities: serializer, circuit breaker, pubsub, metrics, alert service"
+requires-python = ">=3.10"
+dependencies = [
+    "redis>=5.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_common*"]
+
+[project.optional-dependencies]
+dev = [
+    "prometheus-client",
+]

@@ -1,0 +1,269 @@
+# TrafficFlow Production Stack
+#
+# Services:
+#   redis     — Pub/Sub message bus (AI worker → backend → WebSocket)
+#   postgres  — Primary database (events, aggregates, jobs, cameras)
+#   api       — FastAPI backend + WebSocket server
+#   worker    — AI inference: YOLO + ByteTrack + lane counting
+#   frontend  — Static SPA dashboard
+#   nginx     — Reverse proxy: / → frontend, /api → api, /ws → api WebSocket
+#
+# Profiles:
+#   default   — all services on CPU
+#   gpu       — worker uses NVIDIA runtime (requires nvidia-container-toolkit)
+#
+# Quick start (CPU):
+#   cp deploy/stack/.env.example deploy/stack/.env
+#   docker compose -f deploy/stack/docker-compose.yml up --build
+#
+# Quick start (GPU):
+#   docker compose -f deploy/stack/docker-compose.yml --profile gpu up --build
+
+name: trafficflow
+
+services:
+
+  # ── Message bus ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: trafficflow_redis
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Primary database ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: trafficflow_postgres
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trafficflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trafficflow_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-trafficflow}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - trafficflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trafficflow} -d ${POSTGRES_DB:-trafficflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI backend + WebSocket ────────────────────────────────────────────
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/api/Dockerfile
+    container_name: trafficflow_api
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      JWT_SECRET: ${JWT_SECRET:-}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trafficflow}:${POSTGRES_PASSWORD:-trafficflow_secret}@postgres:5432/${POSTGRES_DB:-trafficflow}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_REQUIRED: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      SERVE_FRONTEND: ${SERVE_FRONTEND:-false}
+      OUTPUT_DIR: /app/outputs
+      CAMERAS_DIR: /app/configs/cameras
+      MAX_WORKERS: ${MAX_WORKERS:-2}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      - ../../configs:/app/configs:ro
+      - trafficflow_outputs:/app/outputs
+      - trafficflow_storage:/app/storage
+      - trafficflow_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/readyz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── AI inference worker (CPU) ──────────────────────────────────────────────
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/worker/Dockerfile
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    container_name: trafficflow_worker
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trafficflow}:${POSTGRES_PASSWORD:-trafficflow_secret}@postgres:5432/${POSTGRES_DB:-trafficflow}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_BASE_URL: http://api:8000
+      MODEL_PATH: /app/weights/${MODEL_FILE:-yolo11n.pt}
+      CAMERAS_DIR: /app/configs/cameras
+      DETECT_EVERY_N_FRAMES: ${DETECT_EVERY_N_FRAMES:-2}
+      HALF_PRECISION: "false"   # no GPU in default profile
+    volumes:
+      - ../../weights:/app/weights:ro
+      - ../../configs:/app/configs:ro
+      - trafficflow_storage:/app/storage
+      - trafficflow_outputs:/app/outputs
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-4g}
+          cpus: ${WORKER_CPU_LIMIT:-2.0}
+        reservations:
+          memory: ${WORKER_MEM_RESERVE:-1g}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    profiles: ["", "cpu"]
+
+  # ── AI inference worker (GPU) ──────────────────────────────────────────────
+  worker-gpu:
+    build:
+      context: ../..
+      dockerfile: deploy/worker/Dockerfile
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}
+        TORCH_PACKAGES: ${TORCH_PACKAGES:-torch torchvision}
+    container_name: trafficflow_worker_gpu
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_BASE_URL: http://api:8000
+      MODEL_PATH: /app/weights/${MODEL_FILE:-yolo11n.pt}
+      CAMERAS_DIR: /app/configs/cameras
+      DETECT_EVERY_N_FRAMES: ${DETECT_EVERY_N_FRAMES:-2}
+      HALF_PRECISION: "true"
+    volumes:
+      - ../../weights:/app/weights:ro
+      - ../../configs:/app/configs:ro
+      - ../../storage:/app/storage
+      - ../../outputs:/app/outputs
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-4g}
+          cpus: ${WORKER_CPU_LIMIT:-2.0}
+        reservations:
+          memory: ${WORKER_MEM_RESERVE:-1g}
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles: ["gpu"]
+
+  # ── Static frontend SPA ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/frontend/Dockerfile
+    container_name: trafficflow_frontend
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      FRONTEND_PORT: 3000
+      # This value is consumed by the user's browser. The Docker hostname
+      # "api" is not resolvable from the host browser, so same-origin proxy
+      # URLs are the safe default. Override when exposing the SPA separately.
+      API_BASE_URL: ${API_BASE_URL:-/}
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "${FRONTEND_PORT:-3000}"
+
+  # ── Nginx reverse proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: trafficflow_nginx
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ../proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  trafficflow_pgdata:
+    name: trafficflow_pgdata
+  trafficflow_outputs:
+    name: trafficflow_outputs
+  trafficflow_storage:
+    name: trafficflow_storage
+  trafficflow_logs:
+    name: trafficflow_logs

@@ -1,0 +1,323 @@
+<div id="page-content-settings" class="tab-content hidden space-y-6">
+    <!-- Settings sidebar + content layout -->
+    <div class="flex gap-6">
+        <!-- Settings navigation sidebar -->
+        <div class="w-48 shrink-0 space-y-1">
+            <button onclick="switchSettingsTab('general')" id="settings-tab-general" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-left transition-all settings-tab active:bg-indigo-500/10 active:text-indigo-400 active:border-indigo-500/30 settings-active">
+                <i data-lucide="sliders-horizontal" class="h-4 w-4"></i> General
+            </button>
+            <button onclick="switchSettingsTab('detection')" id="settings-tab-detection" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 text-left transition-all">
+                <i data-lucide="cpu" class="h-4 w-4"></i> Detection
+            </button>
+            <button onclick="switchSettingsTab('storage')" id="settings-tab-storage" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 text-left transition-all">
+                <i data-lucide="hard-drive" class="h-4 w-4"></i> Storage
+            </button>
+            <button onclick="switchSettingsTab('system')" id="settings-tab-system" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 text-left transition-all">
+                <i data-lucide="server" class="h-4 w-4"></i> System
+            </button>
+            <button onclick="switchSettingsTab('notifications')" id="settings-tab-notifications" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/30 text-left transition-all">
+                <i data-lucide="bell" class="h-4 w-4"></i> Notifications
+            </button>
+        </div>
+
+        <!-- Settings content area -->
+        <div class="flex-1 min-w-0">
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- GENERAL -->
+            <!-- ════════════════════════════════════════════ -->
+            <div id="settings-panel-general" class="settings-panel space-y-6">
+                <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="p-2 rounded-lg bg-indigo-500/10"><i data-lucide="globe" class="h-5 w-5 text-indigo-400"></i></div>
+                        <div><h3 class="text-base font-bold text-white">General Settings</h3><p class="text-xs text-slate-500 mt-0.5">API connection, timezone, and display preferences</p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">API Base URL</label>
+                            <input id="s-api-url" type="text" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500" placeholder="http://localhost:8000">
+                            <p class="text-[10px] text-slate-600 mt-1">Base URL of the TrafficFlow API server</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Refresh Interval</label>
+                            <select id="s-refresh-interval" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="10">10 seconds</option>
+                                <option value="30" selected>30 seconds</option>
+                                <option value="60">1 minute</option>
+                                <option value="120">2 minutes</option>
+                                <option value="300">5 minutes</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Timezone</label>
+                            <select id="s-timezone" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="UTC">UTC</option>
+                                <option value="Asia/Ho_Chi_Minh">Asia/Ho_Chi_Minh (UTC+7)</option>
+                                <option value="Asia/Bangkok">Asia/Bangkok (UTC+7)</option>
+                                <option value="Asia/Singapore">Asia/Singapore (UTC+8)</option>
+                                <option value="America/New_York">America/New_York (UTC-5)</option>
+                                <option value="America/Chicago">America/Chicago (UTC-6)</option>
+                                <option value="America/Los_Angeles">America/Los_Angeles (UTC-8)</option>
+                                <option value="Europe/London">Europe/London (UTC+0)</option>
+                                <option value="Europe/Berlin">Europe/Berlin (UTC+1)</option>
+                                <option value="Europe/Paris">Europe/Paris (UTC+1)</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-3 pt-6">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input id="s-chart-animations" type="checkbox" checked class="sr-only peer">
+                                <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                            </label>
+                            <div><p class="text-sm text-slate-200 font-medium">Chart Animations</p><p class="text-xs text-slate-500">Disable for lower CPU usage on slow machines</p></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- DETECTION -->
+            <!-- ════════════════════════════════════════════ -->
+            <div id="settings-panel-detection" class="settings-panel space-y-6 hidden">
+                <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="p-2 rounded-lg bg-indigo-500/10"><i data-lucide="cpu" class="h-5 w-5 text-indigo-400"></i></div>
+                        <div><h3 class="text-base font-bold text-white">Detection Defaults</h3><p class="text-xs text-slate-500 mt-0.5">Global defaults for model inference. Per-camera overrides in camera config.</p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Confidence Threshold</label>
+                            <div class="flex items-center gap-3">
+                                <input id="s-conf" type="range" min="0" max="1" step="0.05" value="0.35" oninput="document.getElementById('s-conf-val').textContent=parseFloat(this.value).toFixed(2)" class="w-full accent-indigo-500">
+                                <span id="s-conf-val" class="text-sm font-bold text-indigo-400 w-12 text-right">0.35</span>
+                            </div>
+                            <p class="text-[10px] text-slate-600 mt-1">Lower = more detections but more false positives</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">IoU Threshold (NMS)</label>
+                            <div class="flex items-center gap-3">
+                                <input id="s-iou" type="range" min="0" max="1" step="0.05" value="0.5" oninput="document.getElementById('s-iou-val').textContent=parseFloat(this.value).toFixed(2)" class="w-full accent-indigo-500">
+                                <span id="s-iou-val" class="text-sm font-bold text-indigo-400 w-12 text-right">0.50</span>
+                            </div>
+                            <p class="text-[10px] text-slate-600 mt-1">Higher = fewer overlapping boxes</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Image Size (px)</label>
+                            <select id="s-imgsz" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="320">320 (fastest)</option>
+                                <option value="480">480 (fast)</option>
+                                <option value="640" selected>640 (balanced)</option>
+                                <option value="960">960 (accurate)</option>
+                                <option value="1280">1280 (most accurate)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Detect Every N Frames</label>
+                            <select id="s-detect-every" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="1">Every frame (most accurate)</option>
+                                <option value="2" selected>Every 2 frames (balanced ~2x speed)</option>
+                                <option value="3">Every 3 frames (~3x speed)</option>
+                                <option value="5">Every 5 frames (~5x speed)</option>
+                                <option value="10">Every 10 frames (fastest)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Tracker</label>
+                            <select id="s-tracker" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="bytetrack">ByteTrack (recommended)</option>
+                                <option value="botsort">BoT-SORT</option>
+                                <option value="deepsort">DeepSORT</option>
+                                <option value="ocsort">OC-SORT</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Track Buffer (frames)</label>
+                            <input id="s-track-buffer" type="number" min="5" max="120" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Max Detections / Frame</label>
+                            <input id="s-max-det" type="number" min="1" max="1000" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                        </div>
+                        <div class="flex items-center gap-3 pt-6">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input id="s-half" type="checkbox" checked class="sr-only peer">
+                                <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                            </label>
+                            <div><p class="text-sm text-slate-200 font-medium">FP16 Half Precision</p><p class="text-xs text-slate-500">2x faster inference on compatible GPUs</p></div>
+                        </div>
+                        <div class="flex items-center gap-3 pt-6">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input id="s-roi-crop" type="checkbox" checked class="sr-only peer">
+                                <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                            </label>
+                            <div><p class="text-sm text-slate-200 font-medium">ROI Crop</p><p class="text-xs text-slate-500">Crop to lane zones for faster inference on static cameras</p></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- STORAGE -->
+            <!-- ════════════════════════════════════════════ -->
+            <div id="settings-panel-storage" class="settings-panel space-y-6 hidden">
+                <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="p-2 rounded-lg bg-indigo-500/10"><i data-lucide="hard-drive" class="h-5 w-5 text-indigo-400"></i></div>
+                        <div><h3 class="text-base font-bold text-white">Storage &amp; Data</h3><p class="text-xs text-slate-500 mt-0.5">Data retention, output paths, and image quality</p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Output Directory</label>
+                            <input id="s-output-dir" type="text" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500 font-mono text-xs" placeholder="./output">
+                            <p class="text-[10px] text-slate-600 mt-1">Where inference outputs (video, CSV, crops) are saved</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Data Retention</label>
+                            <div class="flex items-center gap-2">
+                                <input id="s-retention" type="number" min="1" max="365" class="w-24 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <span class="text-sm text-slate-500">days</span>
+                            </div>
+                            <p class="text-[10px] text-slate-600 mt-1">Auto-purge events and crops after N days</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Crop Format</label>
+                            <select id="s-crop-format" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="jpg">JPEG (smallest)</option>
+                                <option value="png">PNG (lossless)</option>
+                                <option value="webp">WebP (modern)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Crop Quality</label>
+                            <div class="flex items-center gap-3">
+                                <input id="s-crop-quality" type="range" min="10" max="100" step="5" value="80" oninput="document.getElementById('s-crop-quality-val').textContent=this.value" class="w-full accent-indigo-500">
+                                <span id="s-crop-quality-val" class="text-sm font-bold text-indigo-400 w-10 text-right">80</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Max Crop Size (px)</label>
+                            <select id="s-crop-max-px" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="128">128</option>
+                                <option value="160">160</option>
+                                <option value="224">224</option>
+                                <option value="320" selected>320 (default)</option>
+                                <option value="512">512</option>
+                                <option value="640">640</option>
+                                <option value="1024">1024</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- SYSTEM -->
+            <!-- ════════════════════════════════════════════ -->
+            <div id="settings-panel-system" class="settings-panel space-y-6 hidden">
+                <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="p-2 rounded-lg bg-indigo-500/10"><i data-lucide="server" class="h-5 w-5 text-indigo-400"></i></div>
+                        <div><h3 class="text-base font-bold text-white">System Resources</h3><p class="text-xs text-slate-500 mt-0.5">Concurrency limits, logging, and DB pool. Some changes require a restart.</p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Max Inference Workers</label>
+                            <input id="s-max-workers" type="number" min="1" max="16" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">Concurrent video inference jobs</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Max Live Streams</label>
+                            <input id="s-max-streams" type="number" min="1" max="64" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">Concurrent MJPEG live streams</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Log Level</label>
+                            <select id="s-log-level" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="DEBUG">DEBUG</option>
+                                <option value="INFO" selected>INFO</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="ERROR">ERROR</option>
+                                <option value="CRITICAL">CRITICAL</option>
+                            </select>
+                            <p class="text-[10px] text-slate-600 mt-1">⚠️ Requires server restart</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Memory Threshold (MB)</label>
+                            <input id="s-memory-threshold" type="number" min="0" max="65536" step="256" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">0 = disabled. Auto-restart server when RSS exceeds this.</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">DB Pool Size</label>
+                            <input id="s-db-pool" type="number" min="1" max="100" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">⚠️ Requires server restart</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">DB Pool Overflow</label>
+                            <input id="s-db-overflow" type="number" min="0" max="50" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">⚠️ Requires server restart</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- NOTIFICATIONS -->
+            <!-- ════════════════════════════════════════════ -->
+            <div id="settings-panel-notifications" class="settings-panel space-y-6 hidden">
+                <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6 space-y-6">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="p-2 rounded-lg bg-indigo-500/10"><i data-lucide="bell" class="h-5 w-5 text-indigo-400"></i></div>
+                        <div><h3 class="text-base font-bold text-white">Notifications &amp; Backpressure</h3><p class="text-xs text-slate-500 mt-0.5">Alert thresholds for queue depth, heartbeat, and event loss</p></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Queue Warn Threshold</label>
+                            <input id="s-bp-warn" type="number" min="64" max="4096" step="64" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">Log warning when event queue depth exceeds this</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Queue Critical Threshold</label>
+                            <input id="s-bp-crit" type="number" min="128" max="8192" step="64" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">Emit alert + drop events when queue reaches this</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">Dead-Letter Max</label>
+                            <input id="s-dl-max" type="number" min="100" max="100000" step="100" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                            <p class="text-[10px] text-slate-600 mt-1">Max dropped events retained in memory for debugging</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">WS Heartbeat Interval</label>
+                            <div class="flex items-center gap-2">
+                                <input id="s-hb-interval" type="number" min="5" max="120" step="5" class="w-24 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <span class="text-sm text-slate-500">seconds</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase text-slate-500 mb-2">WS Heartbeat Timeout</label>
+                            <div class="flex items-center gap-2">
+                                <input id="s-hb-timeout" type="number" min="10" max="300" step="10" class="w-24 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
+                                <span class="text-sm text-slate-500">seconds</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════ -->
+            <!-- SAVE BAR -->
+            <!-- ════════════════════════════════════════════ -->
+            <div class="sticky bottom-0 bg-slate-950/90 backdrop-blur-sm border border-slate-800 rounded-xl px-6 py-4 mt-6 flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-slate-500" id="settings-status">Settings are saved to <code class="text-indigo-400 bg-slate-800 px-1 rounded">configs/settings.json</code></p>
+                    <p class="text-[10px] text-slate-600 mt-0.5" id="settings-last-saved"></p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="resetSettings()" class="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-all">Reset</button>
+                    <button onclick="saveSettings()" class="px-6 py-2.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all flex items-center gap-2">
+                        <i data-lucide="check" class="h-4 w-4"></i> Save All
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>

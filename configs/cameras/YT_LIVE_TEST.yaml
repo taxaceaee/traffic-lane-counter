@@ -1,0 +1,32 @@
+camera:
+  camera_id: YT_LIVE_TEST
+  name: YouTube Live Camera 01
+  source_type: youtube_live
+  source: https://www.youtube.com/watch?v=sJvEFrG0wq0
+  fps: 30.0
+  frame_size:
+    width: 1280
+    height: 720
+  allow_scaling: true
+model:
+  model_id: yolo11n_coco
+  conf_threshold: 0.35
+  iou_threshold: 0.5
+  imgsz: 640
+  allowed_classes:
+  - car
+  - motorcycle
+  - truck
+  - bus
+tracking:
+  tracker: bytetrack.yaml
+  active_track_timeout_frames: 10
+  min_track_age_frames: 3
+lanes:
+  config_path: ../lanes/YT_LIVE_TEST_lanes.yaml
+counting:
+  min_cross_distance_px: 2.0
+output:
+  save_video: false
+  save_jsonl: false
+  save_csv: false

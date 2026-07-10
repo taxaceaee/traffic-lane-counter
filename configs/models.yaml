@@ -1,0 +1,10 @@
+models:
+  - model_id: yolo11n_coco
+    path: weights/yolo11n.pt
+    class_mode: coco_pretrained
+    description: YOLO11n COCO-pretrained (nano, ~6MB, fastest). Lightweight for high-fps/low-GPU.
+
+preload:
+  enabled: false
+  models:
+    - yolo11n_coco

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrafficFlow Command Center</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231E1B4B'/%3E%3Cpath d='M32 12l14 5v12c0 10-5.8 18.9-14 23-8.2-4.1-14-13-14-23V17l14-5zm0 7.1-8 2.8v7.1c0 6.5 3.3 12.8 8 15.7 4.7-2.9 8-9.2 8-15.7v-7.1l-8-2.8z' fill='%23A5B4FC'/%3E%3C/svg%3E">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { theme: { extend: { colors: { slate: { 950: '#020617' } } } } }</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        h1,h2,h3,h4,h5,h6 { font-family: 'Outfit', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #334155; }
+        .nav-active { background: rgba(99,102,241,0.15); color: #818cf8; border-left: 3px solid #6366f1; padding-left: calc(0.75rem - 3px); }
+        .kpi-card { background: linear-gradient(135deg, rgba(30,41,59,0.6) 0%, rgba(15,23,42,0.8) 100%); }
+        .alert-critical { border-left: 3px solid #ef4444; }
+        .alert-warning { border-left: 3px solid #f59e0b; }
+        .alert-info { border-left: 3px solid #3b82f6; }
+        @keyframes pulse-dot { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+        .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+        .apexcharts-canvas { max-width: 100% !important; overflow: hidden !important; }
+        .apexcharts-canvas svg { overflow: hidden !important; }
+        #chart-counting-lanes, #chart-counting-lanes .apexcharts-canvas { width: 100% !important; max-width: 100% !important; }
+        [id^="chart-"] { overflow: hidden; min-height: 200px; }
+    </style>
+</head>
+<body class="h-full text-slate-100 flex overflow-hidden">
+
+<!-- ========== AUTHENTICATION ========== -->
+<div id="login-screen" class="fixed inset-0 z-[100] hidden items-center justify-center bg-slate-950">
+    <form id="login-form" class="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-2xl">
+        <div class="mb-6">
+            <h1 class="text-2xl font-bold text-white">TrafficFlow</h1>
+            <p class="mt-1 text-sm text-slate-400">Sign in to the monitoring console.</p>
+        </div>
+        <label class="mb-1 block text-xs font-semibold text-slate-400" for="login-username">Username</label>
+        <input id="login-username" required autocomplete="username" class="mb-4 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-white outline-none focus:border-indigo-500">
+        <label class="mb-1 block text-xs font-semibold text-slate-400" for="login-password">Password</label>
+        <input id="login-password" required type="password" autocomplete="current-password" class="mb-4 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-white outline-none focus:border-indigo-500">
+        <p id="login-error" class="mb-4 hidden text-sm text-rose-400"></p>
+        <button id="login-submit" type="submit" class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500">Sign in</button>
+    </form>
+</div>
+
+<!-- ========== SIDEBAR ========== -->
+<aside class="w-60 bg-slate-900 border-r border-slate-800 flex flex-col justify-between h-full flex-shrink-0">
+    <div class="overflow-y-auto">
+        <!-- Logo -->
+        <div class="p-5 flex items-center gap-3 border-b border-slate-800">
+            <div class="bg-indigo-600/10 p-2 rounded-lg border border-indigo-500/20">
+                <i data-lucide="shield" class="h-5 w-5 text-indigo-400"></i>
+            </div>
+            <div>
+                <h2 class="text-base font-bold text-white tracking-tight">TrafficFlow</h2>
+                <p class="text-[10px] text-indigo-400 font-medium uppercase tracking-wider">AI Monitoring</p>
+            </div>
+        </div>
+
+        <nav class="px-3 py-4 space-y-5">
+            <!-- Operational Layer -->
+            <div>
+                <p class="px-2 text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Operational</p>
+                <div class="space-y-0.5">
+                    <button onclick="switchTab('dashboard')" id="btn-dashboard" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="layout-dashboard" class="h-4 w-4 flex-shrink-0"></i> Dashboard
+                    </button>
+                    <button onclick="switchTab('live')" id="btn-live" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="radio" class="h-4 w-4 flex-shrink-0"></i> Live Monitoring
+                        <span id="live-badge" class="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hidden">LIVE</span>
+                    </button>
+                    <button onclick="switchTab('counting')" id="btn-counting" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="hash" class="h-4 w-4 flex-shrink-0"></i> Vehicle Counting
+                    </button>
+                    <button onclick="switchTab('alerts')" id="btn-alerts" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="bell" class="h-4 w-4 flex-shrink-0"></i> Alerts
+                        <span id="alert-count-badge" class="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 hidden">0</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Management Layer -->
+            <div>
+                <p class="px-2 text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Management</p>
+                <div class="space-y-0.5">
+                    <button onclick="switchTab('cameras')" id="btn-cameras" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="camera" class="h-4 w-4 flex-shrink-0"></i> Cameras
+                    </button>
+                    <button onclick="switchTab('lanes')" id="btn-lanes" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="activity" class="h-4 w-4 flex-shrink-0"></i> Lane Config
+                    </button>
+                    <button onclick="switchTab('jobs')" id="btn-jobs" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="play-circle" class="h-4 w-4 flex-shrink-0"></i> Inference Jobs
+                    </button>
+                    <button onclick="switchTab('models')" id="btn-models" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="cpu" class="h-4 w-4 flex-shrink-0"></i> Models
+                    </button>
+                </div>
+            </div>
+
+            <!-- Decision Layer -->
+            <div>
+                <p class="px-2 text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Decision</p>
+                <div class="space-y-0.5">
+                    <button onclick="switchTab('analytics')" id="btn-analytics" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="bar-chart-3" class="h-4 w-4 flex-shrink-0"></i> Analytics
+                    </button>
+                    <button onclick="switchTab('events')" id="btn-events" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="git-commit" class="h-4 w-4 flex-shrink-0"></i> Events Log
+                    </button>
+                    <button onclick="switchTab('reports')" id="btn-reports" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="file-text" class="h-4 w-4 flex-shrink-0"></i> Reports
+                    </button>
+                </div>
+            </div>
+
+            <!-- Administration -->
+            <div>
+                <p class="px-2 text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Administration</p>
+                <div class="space-y-0.5">
+                    <button onclick="switchTab('health')" id="btn-health" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="server" class="h-4 w-4 flex-shrink-0"></i> System Health
+                    </button>
+                    <button onclick="switchTab('users')" id="btn-users" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="users" class="h-4 w-4 flex-shrink-0"></i> Users & Audit
+                    </button>
+                    <button onclick="switchTab('settings')" id="btn-settings" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                        <i data-lucide="settings" class="h-4 w-4 flex-shrink-0"></i> Settings
+                    </button>
+                </div>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Status Footer -->
+    <div class="p-3 border-t border-slate-800">
+        <div class="bg-slate-950 px-3 py-2 rounded-lg flex items-center justify-between border border-slate-800">
+            <div class="flex items-center gap-2">
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span class="text-xs text-slate-400">System</span>
+            </div>
+            <span id="conn-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">ONLINE</span>
+        </div>
+        <p class="text-[10px] text-slate-600 text-center mt-2" id="last-refresh-time">Last sync: —</p>
+    </div>
+</aside>
+
+<!-- ========== MAIN ========== -->
+<main class="flex-1 flex flex-col overflow-hidden bg-slate-950">
+
+    <!-- Top Bar -->
+    <div class="flex justify-between items-center px-8 py-4 border-b border-slate-800/60 bg-slate-950 flex-shrink-0">
+        <div>
+            <h1 id="page-title" class="text-2xl font-extrabold text-white tracking-tight">Dashboard</h1>
+            <p id="page-subtitle" class="text-xs text-slate-400 mt-0.5">Traffic overview — today's KPIs, trends, and top cameras.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="alert-topbar" class="hidden items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 font-semibold">
+                <i data-lucide="bell" class="h-3.5 w-3.5"></i>
+                <span id="alert-topbar-text">0 Active Alerts</span>
+            </div>
+            <button onclick="fullRefresh()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-800 hover:border-slate-700 bg-slate-900 transition-all text-slate-300">
+                <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i> Refresh
+            </button>
+            <button onclick="doLogout()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-800 hover:border-rose-500/30 bg-slate-900 transition-all text-slate-300 hover:text-rose-400">
+                <i data-lucide="log-out" class="h-3.5 w-3.5"></i> Logout
+            </button>
+            <span class="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">PRODUCTION</span>
+        </div>
+    </div>
+
+    <!-- Page Content (loaded dynamically from frontend/pages/{tabId}.html) -->
+    <div id="page-content-area" class="flex-1 overflow-y-auto p-8"></div>
+</main>
+
+<!-- ========== TOAST CONTAINER ========== -->
+<div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none" style="max-width: 380px;"></div>
+
+<!-- ========== JAVASCRIPT ========== -->
+<script defer src="config.js?t=20260709"></script>
+<script defer src="js/core.js?t=20260709"></script>
+<script defer src="js/pages/dashboard.js?t=20260709"></script>
+<script defer src="js/pages/live.js?t=20260709"></script>
+<script defer src="js/pages/counting.js?t=20260709"></script>
+<script defer src="js/pages/alerts.js?t=20260709"></script>
+<script defer src="js/pages/cameras.js?t=20260709"></script>
+<script defer src="js/pages/lanes.js?t=20260709"></script>
+<script defer src="js/pages/jobs.js?t=20260709"></script>
+<script defer src="js/pages/models.js?t=20260709"></script>
+<script defer src="js/pages/analytics.js?t=20260709"></script>
+<script defer src="js/pages/events.js?t=20260709"></script>
+<script defer src="js/pages/reports.js?t=20260709"></script>
+<script defer src="js/pages/health.js?t=20260709"></script>
+<script defer src="js/pages/users.js?t=20260709"></script>
+<script defer src="js/pages/settings.js?t=20260709"></script>
+</body>
+</html>
