@@ -4,11 +4,12 @@ version = "1.0.0"
 description = "TrafficFlow — vision-based real-time per-lane vehicle counting (meta package)"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
+    "numpy<2",
     "opencv-python",
     "PyYAML",
     "tqdm",
     "ultralytics",
+    "lap>=0.5.12",
     "fastapi>=0.110,<0.111",
     "uvicorn[standard]>=0.29,<0.31",
     "pydantic",

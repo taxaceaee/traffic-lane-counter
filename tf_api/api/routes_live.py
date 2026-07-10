@@ -106,6 +106,9 @@ def _cleanup_stale_streams():
             _core, _q, _meta, sw, sess, stop_ev = _streams.pop(cid)
             _last_snapshots.pop(cid, None)
             stop_ev.set()  # signal capture thread to stop
+            for thread in _meta.get("threads", []):
+                if thread is not threading.current_thread():
+                    thread.join(timeout=5.0)
             if sw is not None:
                 try:
                     sw.stop(timeout=3.0)
@@ -372,8 +375,12 @@ def _start_pipeline(
             except (ValueError, Empty, Full):
                 pass
 
-    threading.Thread(target=_encode_worker, daemon=True,
-                     name=f"enc-{camera_id}").start()
+    encode_thread = threading.Thread(
+        target=_encode_worker,
+        daemon=True,
+        name=f"enc-{camera_id}",
+    )
+    encode_thread.start()
 
     # MotionDetector — skips YOLO entirely on static frames (saves 40-60% GPU)
     _motion_detector = (
@@ -647,7 +654,13 @@ def _start_pipeline(
             finally:
                 reader.release()
 
-    threading.Thread(target=_capture_loop, daemon=True, name=f"cam-{camera_id}").start()
+    capture_thread = threading.Thread(
+        target=_capture_loop,
+        daemon=True,
+        name=f"cam-{camera_id}",
+    )
+    capture_thread.start()
+    stream_meta["threads"] = [capture_thread, encode_thread]
     return core, annotated_queue, stream_meta, storage_worker, None, stop_event
 
 
@@ -785,6 +798,9 @@ def _cleanup_stream(camera_id: str) -> bool:
         _core, _q, _meta, sw, sess, stop_ev = _streams.pop(camera_id)
         _last_snapshots.pop(camera_id, None)
     stop_ev.set()
+    for thread in _meta.get("threads", []):
+        if thread is not threading.current_thread():
+            thread.join(timeout=5.0)
     if sw is not None:
         try:
             sw.stop(timeout=3.0)

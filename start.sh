@@ -12,12 +12,12 @@ PORT="${PORT:-8000}"
 SERVE_FRONTEND="${SERVE_FRONTEND:-true}"
 
 BOOTSTRAP_REQUIRED=0
-USE_SYSTEM_GPU=0
+USE_GPU=0
 if [ "${FORCE_CPU:-false}" != "true" ] && command -v nvidia-smi >/dev/null 2>&1 \
-    && "$PYTHON_BIN" -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; then
-  USE_SYSTEM_GPU=1
+    ; then
+  USE_GPU=1
 fi
-if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import alembic, fastapi, yaml, passlib, yt_dlp, cv2, uvicorn, lap" >/dev/null 2>&1; then
+if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import alembic, fastapi, yaml, passlib, yt_dlp, cv2, uvicorn" >/dev/null 2>&1; then
   BOOTSTRAP_REQUIRED=1
 elif [ "${FORCE_CPU:-false}" != "true" ] && command -v nvidia-smi >/dev/null 2>&1 \
     && ! .venv/bin/python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; then
@@ -28,31 +28,22 @@ fi
 if [ "$BOOTSTRAP_REQUIRED" -eq 1 ]; then
   echo "Bootstrapping local virtualenv..."
   rm -rf .venv
-  # On a GPU host, reuse the already-installed, working CUDA Torch/OpenCV ABI
-  # instead of downloading a second multi-GB CUDA stack into the venv.
-  # CPU hosts use a fully isolated venv to avoid distro ABI mixing.
-  if [ "$USE_SYSTEM_GPU" -eq 1 ]; then
-    "$PYTHON_BIN" -m venv --system-site-packages .venv
-  else
-    "$PYTHON_BIN" -m venv .venv
-  fi
+  # Always isolate project packages. GPU hosts receive an explicit CUDA wheel;
+  # this avoids mixing incompatible distro NumPy/OpenCV/Torch ABIs.
+  "$PYTHON_BIN" -m venv .venv
   # Use the host CA bundle explicitly; some pip builds lose their vendored
   # certifi path while bootstrapping a fresh venv.
   export PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"
   .venv/bin/python -m pip install --upgrade pip --cert "$PIP_CERT"
   # Prefer the installed NVIDIA stack for local inference. Override with
   # FORCE_CPU=true only on a machine without a usable NVIDIA runtime.
-  if [ "$USE_SYSTEM_GPU" -eq 1 ]; then
-    echo "NVIDIA GPU detected; reusing system CUDA 12.1 Torch wheels."
-    # Torch, torchvision, ultralytics, NumPy and OpenCV come from the verified
-    # system GPU environment. Install only the API/runtime packages absent from
-    # it, then install this project without resolving heavy dependencies.
-    .venv/bin/python -m pip install --no-cache-dir \
-      'fastapi>=0.110,<0.111' 'uvicorn[standard]>=0.29,<0.31' pydantic \
-      python-multipart 'redis>=5.0' yt-dlp alembic \
-      slowapi passlib[bcrypt] 'bcrypt>=4.0,<4.1' prometheus-client pytest pytest-timeout \
-      --cert "$PIP_CERT"
-    .venv/bin/python -m pip install --no-deps -e ".[dev]" --cert "$PIP_CERT"
+  if [ "$USE_GPU" -eq 1 ]; then
+    echo "NVIDIA GPU detected; installing isolated CUDA 12.1 Torch wheels."
+    .venv/bin/python -m pip install \
+      --index-url https://download.pytorch.org/whl/cu121 \
+      --extra-index-url https://pypi.org/simple \
+      torch==2.2.2+cu121 torchvision==0.17.2+cu121 --cert "$PIP_CERT"
+    .venv/bin/python -m pip install -e ".[dev]" --cert "$PIP_CERT"
     export HALF_PRECISION="${HALF_PRECISION:-true}"
   else
     echo "No NVIDIA GPU selected; installing CPU Torch wheels."
