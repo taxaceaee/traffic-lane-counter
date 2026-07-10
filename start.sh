@@ -36,6 +36,10 @@ source .venv/bin/activate
 
 export APP_ENV="${APP_ENV:-development}"
 export SERVE_FRONTEND
+# Local runtime data belongs under the user-writable data directory. Docker
+# overrides this with its named /app/storage volume.
+export STORAGE_ROOT="${STORAGE_ROOT:-data/storage}"
+export OUTPUT_DIR="${OUTPUT_DIR:-data/outputs}"
 
 # IDEs and other local projects frequently occupy 8000. A default development
 # launch should remain usable in that situation; an explicitly supplied PORT

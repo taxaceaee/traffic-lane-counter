@@ -9,6 +9,7 @@
 """
 
 import logging
+import os
 import secrets
 import threading
 import time
@@ -328,7 +329,7 @@ def _start_pipeline(
 
     from tf_common.live_bus import LiveEventBus
 
-    storage_root = Path("storage") / camera_id
+    storage_root = Path(os.getenv("STORAGE_ROOT", "storage")) / camera_id
     storage_root.mkdir(parents=True, exist_ok=True)
     storage_worker = StorageWorker(
         storage_root=storage_root,

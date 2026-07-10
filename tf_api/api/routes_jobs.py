@@ -9,6 +9,7 @@
 import csv
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ logger = logging.getLogger("trafficflow.jobs")
 
 router = APIRouter(prefix="/api", tags=["jobs"])
 
-_OUTPUT_DIR = Path("outputs")
+_OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "outputs"))
 _CONFIGS_DIR = Path("configs")
 _JOB_RETENTION_DAYS = 7
 

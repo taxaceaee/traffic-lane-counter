@@ -96,6 +96,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       SERVE_FRONTEND: ${SERVE_FRONTEND:-false}
       OUTPUT_DIR: /app/outputs
+      STORAGE_ROOT: /app/storage
       CAMERAS_DIR: /app/configs/cameras
       MAX_WORKERS: ${MAX_WORKERS:-2}
     ports:
