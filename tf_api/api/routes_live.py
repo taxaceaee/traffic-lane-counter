@@ -379,9 +379,10 @@ def _start_pipeline(
         else None
     )
     _last_det: dict[str, Any] | None = None
+    _last_published_occupancy: dict[str, int] | None = None
 
     def _capture_loop():
-        nonlocal _last_det
+        nonlocal _last_det, _last_published_occupancy
         attempt = 0
         while not stop_event.is_set():
             try:
@@ -574,10 +575,16 @@ def _start_pipeline(
                         )
 
                     # ── Publish live occupancy snapshot ────────────────
-                    occupancy = det.get("occupancy", {})
-                    if occupancy:
-                        # In-process bus (always available, no Redis needed)
-                        LiveEventBus.publish(camera_id, {
+                    occupancy = det.get("occupancy", {}) or {}
+                    # Publish an initial/changed snapshot even when the camera
+                    # is empty. The old truthy-only check left the UI stale at
+                    # zero and the Redis payload lacked the frontend event
+                    # envelope (type/camera_id/data).
+                    if (
+                        _last_published_occupancy != occupancy
+                        or frame_idx % 10 == 0
+                    ):
+                        live_message = {
                             "type": "occupancy_update",
                             "camera_id": camera_id,
                             "data": {
@@ -585,25 +592,46 @@ def _start_pipeline(
                                 "frame_idx": frame_idx,
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
-                        })
-                        # Redis (when available)
+                        }
+                        LiveEventBus.publish(camera_id, live_message)
                         if publisher is not None:
                             try:
-                                publisher.publish_live_state(camera_id, {
-                                    "occupancy": occupancy,
-                                    "frame_idx": frame_idx,
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                })
+                                publisher.publish_live_state(camera_id, live_message)
                             except Exception:
                                 logger.debug("Failed to publish live state for %s", camera_id, exc_info=True)
+                        _last_published_occupancy = dict(occupancy)
 
-                    # Also publish crossing events as "count" events
+                    # Publish crossing and lane-change events through Redis as
+                    # well as the in-process bus. The latter only works when
+                    # API and capture loop share a process, which is not true
+                    # for the Docker worker/API deployment.
                     for cx in crossings:
-                        LiveEventBus.publish(camera_id, {
+                        event_message = {
                             "type": "count_event",
                             "camera_id": camera_id,
                             "data": cx,
-                        })
+                        }
+                        LiveEventBus.publish(camera_id, event_message)
+                        if publisher is not None:
+                            publisher.publish_live_state(camera_id, event_message)
+                    for event in det.get("events", []) or []:
+                        lane_message = {
+                            "type": "lane_change_event",
+                            "camera_id": camera_id,
+                            "data": {
+                                **event,
+                                "previous_lane_id": event.get(
+                                    "previous_lane_id", event.get("previous_stable_lane")
+                                ),
+                                "current_lane_id": event.get(
+                                    "current_lane_id", event.get("current_stable_lane")
+                                ),
+                                "frame_id": event.get("frame_id", event.get("frame", frame_idx)),
+                            },
+                        }
+                        LiveEventBus.publish(camera_id, lane_message)
+                        if publisher is not None:
+                            publisher.publish_live_state(camera_id, lane_message)
                     frame_idx += 1
 
             finally:

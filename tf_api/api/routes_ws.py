@@ -211,6 +211,11 @@ async def ws_live(ws: WebSocket):
                     await ws.send_text(dumps({"type": "ping"}))
                 except (ConnectionError, OSError, ValueError):
                     break
+            except (WebSocketDisconnect, RuntimeError):
+                # A client may close between receive/send operations. Do not
+                # let that disconnect escape into ASGI or kill the shared
+                # Redis listener for other subscribed clients.
+                break
                 continue
     except WebSocketDisconnect:
         pass
@@ -316,7 +321,7 @@ async def broadcast_raw(data: dict[str, Any]) -> None:
                 continue
             try:
                 await ws.send_text(message)
-            except (ConnectionError, OSError, ValueError):
+            except (ConnectionError, OSError, ValueError, RuntimeError, WebSocketDisconnect):
                 with suppress(Exception):
                     conns.remove(ws)
                 _ws_cameras.pop(id(ws), None)
