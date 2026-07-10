@@ -339,6 +339,8 @@ def _start_pipeline(
     annotated_queue: Queue = Queue(maxsize=1)
     stream_meta: dict[str, Any] = {"source_fps": float(cfg.get("fps", 25.0) or 25.0)}
     stop_event = threading.Event()
+    from tf_common.monitoring.live_metrics import record_stream_state
+    record_stream_state(camera_id, "starting")
 
     # Dedicated encode thread with bounded work queue — offloads cv2.imencode
     # (~15-25ms per 1280x720 frame) so the capture loop never blocks on it.
@@ -401,6 +403,7 @@ def _start_pipeline(
                 source_fps = float(getattr(reader, "get_fps", 0.0) or cfg.get("fps", 25) or 25.0)
                 stream_meta["source_fps"] = round(source_fps, 1)
                 attempt = 0  # reset after successful connect
+                record_stream_state(camera_id, "connecting")
                 # Resolve camera_offline alert (only if a previous offline was emitted)
                 if attempt > 0 or getattr(_capture_loop, "_was_offline", False):
                     from tf_common.alert_service import alert_service as _as
@@ -416,6 +419,11 @@ def _start_pipeline(
                              f"Connection lost after {_MAX_RECONNECT_ATTEMPTS} attempts. Check source or network.",
                              camera_id=camera_id, alert_type="camera_offline")
                     _capture_loop._was_offline = True
+                    record_stream_state(
+                        camera_id,
+                        "error",
+                        "Camera source unavailable after reconnection attempts",
+                    )
                     break
                 backoff = min(
                     _RECONNECT_BACKOFF_BASE * (2 ** (attempt - 1)),
@@ -425,6 +433,7 @@ def _start_pipeline(
                     "Camera %s: reconnection attempt %d/%d in %.1fs",
                     camera_id, attempt, _MAX_RECONNECT_ATTEMPTS, backoff,
                 )
+                record_stream_state(camera_id, "reconnecting", f"Connection attempt {attempt}/{_MAX_RECONNECT_ATTEMPTS}")
                 time.sleep(backoff)
                 continue
 
@@ -884,7 +893,16 @@ async def live_stream_mjpg(
                     {"detail": f"Camera not found: {camera_id}"},
                     status_code=404,
                 )
-            core, queue, stream_meta, sw, sess, stop_ev = _start_pipeline(camera_id, cfg)
+            try:
+                core, queue, stream_meta, sw, sess, stop_ev = _start_pipeline(camera_id, cfg)
+            except Exception as exc:
+                logger.exception("Failed to start live pipeline for %s", camera_id)
+                from tf_common.monitoring.live_metrics import record_stream_state
+                record_stream_state(camera_id, "error", f"Pipeline start failed: {type(exc).__name__}")
+                return JSONResponse(
+                    {"detail": f"Live pipeline could not start for {camera_id}"},
+                    status_code=503,
+                )
             stream_meta.update({"connections": 0, "last_access": time.monotonic()})
             _streams[camera_id] = (core, queue, stream_meta, sw, sess, stop_ev)
 

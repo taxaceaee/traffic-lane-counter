@@ -275,13 +275,23 @@ function _monitorStream(cameraId) {
             const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
             const statusEl = document.getElementById('live-stream-status');
             if (!statusEl) return;
-            if (m && m.process_fps !== undefined && m.process_fps > 0) {
+            if (m && m.status === 'error') {
+                statusEl.textContent = m.error || 'Pipeline error';
+            } else if (m && m.status === 'reconnecting') {
+                statusEl.textContent = m.error || 'Reconnecting camera...';
+            } else if (m && m.process_fps !== undefined && m.process_fps > 0) {
                 const inFps = m.source_fps > 0 ? m.source_fps.toFixed(1) : '0.0';
                 const procFps = m.process_fps.toFixed(1);
                 const outFps = m.output_fps > 0 ? m.output_fps.toFixed(1) : '0.0';
                 statusEl.textContent = `in ${inFps} | proc ${procFps} | out ${outFps} fps`;
+            } else if (m && m.status === 'connecting') {
+                statusEl.textContent = 'Connecting to camera...';
+            } else if (m && m.status === 'starting') {
+                statusEl.textContent = 'Starting pipeline...';
+            } else if (m && m.status === 'stopped') {
+                statusEl.textContent = 'Stream stopped';
             } else if (m && m.process_fps !== undefined) {
-                statusEl.textContent = 'Pipeline starting...';
+                statusEl.textContent = 'No frames received';
             } else {
                 statusEl.textContent = 'Idle';
             }
@@ -307,7 +317,7 @@ function startLiveMetricsPolling(cameraId) {
                 return;
             }
             set('live-input-fps', m.source_fps > 0 ? m.source_fps.toFixed(1) : '—');
-            set('live-fps', m.process_fps > 0 ? m.process_fps.toFixed(1) : 'Starting...');
+            set('live-fps', m.process_fps > 0 ? m.process_fps.toFixed(1) : (m.status === 'error' ? 'Error' : 'Waiting...'));
             set('live-output-fps', m.output_fps > 0 ? m.output_fps.toFixed(1) : '—');
             set('live-latency', m.avg_latency_ms > 0 ? m.avg_latency_ms.toFixed(0) + 'ms' : '—');
             set('live-gpu', m.gpu_available && m.gpu_util_pct >= 0 ? m.gpu_util_pct.toFixed(0) + '%' : 'N/A');

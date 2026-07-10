@@ -46,6 +46,9 @@ def _empty_store() -> dict[str, Any]:
         "gpu_util_pct": _probe_gpu(),
         "gpu_available": _gpu_available(),
         "stream_active": False,
+        "status": "starting",
+        "error": None,
+        "last_frame_at": None,
     }
 
 
@@ -153,6 +156,9 @@ def record_frame(
             _store[camera_id] = _empty_store()
         entry = _store[camera_id]
         entry["stream_active"] = True
+        entry["status"] = "active"
+        entry["error"] = None
+        entry["last_frame_at"] = time.time()
         entry["process_timestamps"].append(now)
         entry["latencies_ms"].append(total_ms)
         if source_fps is not None:
@@ -184,13 +190,30 @@ def record_output_frame(camera_id: str) -> None:
             _store[camera_id] = _empty_store()
         entry = _store[camera_id]
         entry["stream_active"] = True
+        if entry.get("status") in {"starting", "connecting"}:
+            entry["status"] = "active"
         entry["output_timestamps"].append(now)
         _trim_window(entry["output_timestamps"], now)
         entry["output_fps"] = _window_fps(entry["output_timestamps"])
 
 
+def record_stream_state(camera_id: str, status: str, error: str | None = None) -> None:
+    """Record a lifecycle state for a live camera pipeline."""
+    allowed = {"starting", "connecting", "active", "reconnecting", "error", "stopped"}
+    if status not in allowed:
+        raise ValueError(f"Unsupported stream status: {status}")
+    with _lock:
+        if camera_id not in _store:
+            _store[camera_id] = _empty_store()
+        entry = _store[camera_id]
+        entry["status"] = status
+        entry["error"] = error
+        entry["stream_active"] = status in {"starting", "connecting", "active", "reconnecting"}
+
+
 def record_stream_stopped(camera_id: str) -> None:
     """Mark a camera stream as disconnected."""
+    record_stream_state(camera_id, "stopped")
     with _lock:
         if camera_id in _store:
             _store[camera_id]["process_fps"] = 0.0
@@ -219,6 +242,9 @@ def get_camera_metrics(camera_id: str) -> dict[str, Any]:
                 "gpu_available": _gpu_available(),
                 "gpu_name": _GNU_NAME,
                 "stream_active": False,
+                "status": "stopped",
+                "error": None,
+                "last_frame_at": None,
             }
         entry = _store[camera_id]
         return {
@@ -232,6 +258,9 @@ def get_camera_metrics(camera_id: str) -> dict[str, Any]:
             "gpu_available": _gpu_available(),
             "gpu_name": _GNU_NAME,
             "stream_active": entry["stream_active"],
+            "status": entry.get("status", "starting"),
+            "error": entry.get("error"),
+            "last_frame_at": entry.get("last_frame_at"),
         }
 
 

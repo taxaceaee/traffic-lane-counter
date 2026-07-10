@@ -9,8 +9,6 @@ uvicorn[standard]>=0.29,<0.31
 pydantic
 sqlalchemy
 python-multipart
-requests
-pandas
 psycopg2-binary
 redis>=5.0
 alembic>=1.13,<2.0

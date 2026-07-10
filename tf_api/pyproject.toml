@@ -15,7 +15,6 @@ dependencies = [
     "bcrypt>=4.0,<4.1",
     "alembic",
     "defusedxml",
-    "pandas",
     "prometheus-client",
 ]
 

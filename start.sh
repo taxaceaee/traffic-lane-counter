@@ -14,9 +14,22 @@ SERVE_FRONTEND="${SERVE_FRONTEND:-true}"
 if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import alembic, fastapi, yaml, passlib, yt_dlp, cv2, uvicorn, lap" >/dev/null 2>&1; then
   echo "Bootstrapping local virtualenv..."
   rm -rf .venv
-  "$PYTHON_BIN" -m venv --system-site-packages .venv
-  .venv/bin/python -m pip install --upgrade pip
-  .venv/bin/python -m pip install -e ".[dev]"
+  # Keep the runtime isolated from distro/user NumPy, OpenCV and torch builds;
+  # mixing those ABI versions was causing `numpy.core.multiarray` import
+  # failures during npm startup.
+  "$PYTHON_BIN" -m venv .venv
+  # Use the host CA bundle explicitly; some pip builds lose their vendored
+  # certifi path while bootstrapping a fresh venv.
+  export PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"
+  .venv/bin/python -m pip install --upgrade pip --cert "$PIP_CERT"
+  # Local development is CPU-only. Installing the default ultralytics torch
+  # dependency would pull hundreds of MB of CUDA libraries that this entrypoint
+  # does not use (the GPU image has its own explicit torch configuration).
+  .venv/bin/python -m pip install \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple \
+    torch==2.7.1+cpu torchvision==0.22.1+cpu --cert "$PIP_CERT"
+  .venv/bin/python -m pip install -e ".[dev]" --cert "$PIP_CERT"
 fi
 
 source .venv/bin/activate
