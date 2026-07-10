@@ -11,21 +11,18 @@
 | Shared runtime | `tf_common/` | logging, alerts, safe path, yt utils |
 | Frontend SPA | `frontend/` | `index.html`, `js/core.js`, `js/pages/*.js` |
 | Deploy assets | `deploy/` | tách theo `api/`, `frontend/`, `worker/`, `proxy/`, `stack/` |
-| Legacy code | `legacy/` | chỉ giữ tham khảo, không dùng cho runtime mới |
 
 ## Những nguyên tắc hiện tại
 
-1. Không sửa vào `legacy/` khi triển khai tính năng mới.
-2. Không dùng lại cây `backend/`, `shared/`, `detection_server/` cũ.
-3. Frontend không còn bundle `frontend/js/app.js`; chỉ dùng:
+1. Frontend không còn bundle `frontend/js/app.js`; chỉ dùng:
    - `frontend/js/core.js`
    - `frontend/js/pages/*.js`
-4. Backend có thể chạy độc lập với frontend bằng `SERVE_FRONTEND=false`.
-5. Settings defaults/reset do backend làm nguồn thật duy nhất:
+2. Backend có thể chạy độc lập với frontend bằng `SERVE_FRONTEND=false`.
+3. Settings defaults/reset do backend làm nguồn thật duy nhất:
    - `GET /api/settings`
    - `GET /api/settings/defaults`
    - `POST /api/settings/reset`
-6. Camera YouTube live chỉ dùng đúng 3 source đã khóa trong `tf_api/api/routes_cameras.py`.
+4. Camera YouTube live chỉ dùng đúng 3 source đã khóa trong `tf_api/api/routes_cameras.py`.
 
 ## Local entrypoints
 

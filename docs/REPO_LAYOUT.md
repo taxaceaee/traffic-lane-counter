@@ -15,21 +15,10 @@
 - `deploy/proxy/` - reverse proxy config
 - `deploy/stack/` - full local integration stack
 
-## Archived runtime
-
-- `legacy/backend/`
-- `legacy/shared/`
-- `legacy/detection_server/`
-- `legacy/frontend_streamlit/`
-- `legacy/code/`
-- `legacy/docs/`
-
-These archived trees remain for reference only and should not be used for new
-deployment work.
-
 ## Documentation policy
 
 Keep only curated docs that match the live runtime. Remove stale generated docs
 instead of leaving contradictory snapshots in the repo.
-Historical audits, migration notes, and superseded planning docs belong in
-`legacy/docs/`.
+Historical audits and migration notes should be kept only when they explain a
+current runtime decision; otherwise remove them instead of creating another
+archive tree.

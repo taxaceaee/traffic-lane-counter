@@ -25,7 +25,6 @@ Camera/Video ──► YOLOv11 ──► ByteTrack ──► Lane Assigner ─�
 - **`tf_db/`** — database models and repositories.
 - **`frontend/`** — standalone SPA assets.
 - **`deploy/`** — service-by-service deployment assets.
-- **`legacy/`** — archived code paths that are no longer in the main runtime.
 
 ## Deployment Surfaces
 
