@@ -11,7 +11,16 @@ fi
 PORT="${PORT:-8000}"
 SERVE_FRONTEND="${SERVE_FRONTEND:-true}"
 
+BOOTSTRAP_REQUIRED=0
 if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import alembic, fastapi, yaml, passlib, yt_dlp, cv2, uvicorn, lap" >/dev/null 2>&1; then
+  BOOTSTRAP_REQUIRED=1
+elif [ "${FORCE_CPU:-false}" != "true" ] && command -v nvidia-smi >/dev/null 2>&1 \
+    && ! .venv/bin/python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; then
+  echo "Existing venv has no usable CUDA Torch; rebuilding it for GPU inference."
+  BOOTSTRAP_REQUIRED=1
+fi
+
+if [ "$BOOTSTRAP_REQUIRED" -eq 1 ]; then
   echo "Bootstrapping local virtualenv..."
   rm -rf .venv
   # Keep the runtime isolated from distro/user NumPy, OpenCV and torch builds;
@@ -22,13 +31,23 @@ if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import alembic, fastapi, 
   # certifi path while bootstrapping a fresh venv.
   export PIP_CERT="${PIP_CERT:-/etc/ssl/certs/ca-certificates.crt}"
   .venv/bin/python -m pip install --upgrade pip --cert "$PIP_CERT"
-  # Local development is CPU-only. Installing the default ultralytics torch
-  # dependency would pull hundreds of MB of CUDA libraries that this entrypoint
-  # does not use (the GPU image has its own explicit torch configuration).
-  .venv/bin/python -m pip install \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple \
-    torch==2.7.1+cpu torchvision==0.22.1+cpu --cert "$PIP_CERT"
+  # Prefer the installed NVIDIA stack for local inference. Override with
+  # FORCE_CPU=true only on a machine without a usable NVIDIA runtime.
+  if [ "${FORCE_CPU:-false}" != "true" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    echo "NVIDIA GPU detected; installing CUDA 12.1 Torch wheels."
+    .venv/bin/python -m pip install \
+      --index-url https://download.pytorch.org/whl/cu121 \
+      --extra-index-url https://pypi.org/simple \
+      torch==2.2.2+cu121 torchvision==0.17.2+cu121 --cert "$PIP_CERT"
+    export HALF_PRECISION="${HALF_PRECISION:-true}"
+  else
+    echo "No NVIDIA GPU selected; installing CPU Torch wheels."
+    .venv/bin/python -m pip install \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      torch==2.7.1+cpu torchvision==0.22.1+cpu --cert "$PIP_CERT"
+    export HALF_PRECISION="${HALF_PRECISION:-false}"
+  fi
   .venv/bin/python -m pip install -e ".[dev]" --cert "$PIP_CERT"
 fi
 

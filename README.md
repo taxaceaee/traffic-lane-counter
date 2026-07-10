@@ -56,6 +56,8 @@ npm run dev
 # username: admin  password: admin123
 # If port 8000 is busy, development mode selects the next free port and
 # prints the actual URL. Use PORT=8000 to require a fixed port.
+# On an NVIDIA host, the local bootstrap installs CUDA 12.1 Torch wheels and
+# enables half precision; set FORCE_CPU=true only for CPU-only development.
 
 # 4. Serve the standalone frontend locally
 API_BASE_URL=http://localhost:8000 .venv/bin/python -m scripts.serve_frontend
