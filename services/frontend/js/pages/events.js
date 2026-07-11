@@ -17,8 +17,8 @@ function setEventsFeed(feed) {
         if (title) title.textContent = 'Lane-change Event Log';
         if (sub) sub.textContent = 'Stable lane transitions for tracked vehicles.';
     } else {
-        if (title) title.textContent = 'Line-crossing Event Log';
-        if (sub) sub.textContent = 'Vehicles that crossed a counting line (requires counting lines).';
+        if (title) title.textContent = 'Track-count Event Log';
+        if (sub) sub.textContent = 'Vehicles counted after stable lane assignment (live pipeline).';
     }
     _renderEventsTableHead();
     loadEventsData();
@@ -51,11 +51,25 @@ function _renderEventsTableHead() {
     }
 }
 
+function _eventsNormalizeList(payload) {
+    // lane-changes → JSON array; counts/recent → { events: [...] }
+    if (Array.isArray(payload)) return payload;
+    if (payload && Array.isArray(payload.events)) return payload.events;
+    if (payload && Array.isArray(payload.data)) return payload.data;
+    return [];
+}
+
 async function loadEventsData() {
     if (!document.getElementById('events-table-head')?.children.length) {
         _renderEventsTableHead();
     }
-    const camera_id = document.getElementById('events-cam-select')?.value;
+    const select = document.getElementById('events-cam-select');
+    let camera_id = select?.value;
+    // Auto-pick first camera so the page is not stuck on "Select a camera".
+    if (select && !camera_id && select.options.length > 1) {
+        select.selectedIndex = 1;
+        camera_id = select.value;
+    }
     const tbody = document.getElementById('events-logs-tbody');
     const countEl = document.getElementById('events-count');
     if (!tbody) return;
@@ -71,12 +85,12 @@ async function loadEventsData() {
         ? `/api/cameras/${encodeURIComponent(camera_id)}/lane-changes?limit=200`
         : `/api/cameras/${encodeURIComponent(camera_id)}/counts/recent?limit=200`;
     const data = await apiRequest(path);
-    _eventsCache = Array.isArray(data) ? data : [];
+    _eventsCache = _eventsNormalizeList(data);
 
     if (!_eventsCache.length) {
         const empty = _eventsFeed === 'lane'
-            ? 'No lane-change events found'
-            : 'No line-crossing events found. Configure counting lines to emit counts.';
+            ? 'No lane-change events found yet (need vehicles to switch stable lanes).'
+            : 'No track-count events found for this camera.';
         tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-slate-600 text-sm">${empty}</td></tr>`;
         if (countEl) countEl.innerText = '0 events';
         return;
@@ -120,9 +134,10 @@ function exportEventsCSV() {
     if (!camera_id) { alert('Select a camera first'); return; }
     const path = _eventsFeed === 'lane'
         ? `/api/cameras/${encodeURIComponent(camera_id)}/lane-changes?limit=10000`
-        : `/api/cameras/${encodeURIComponent(camera_id)}/counts/recent?limit=10000`;
-    apiRequest(path).then((data) => {
-        if (!data || !data.length) { alert('No data to export'); return; }
+        : `/api/cameras/${encodeURIComponent(camera_id)}/counts/recent?limit=200`;
+    apiRequest(path).then((payload) => {
+        const data = _eventsNormalizeList(payload);
+        if (!data.length) { alert('No data to export'); return; }
         let csv;
         if (_eventsFeed === 'lane') {
             csv = 'id,camera_id,track_id,class_name,previous_lane_id,current_lane_id,frame_id,timestamp\n';

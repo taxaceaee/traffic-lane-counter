@@ -31,6 +31,14 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 _LANES_DIR = Path("configs/lanes")
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    """Parse ISO timestamps from the SPA (``toISOString()`` uses trailing ``Z``)."""
+    if not value:
+        return None
+    # Python 3.10 fromisoformat rejects trailing Z; normalize to +00:00.
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _load_lane_names(camera_id: str) -> dict[str, str]:
     """Load lane_id → human-readable name mapping from lane YAML config."""
     lanes_path = _LANES_DIR / f"{camera_id}_lanes.yaml"
@@ -144,8 +152,11 @@ async def get_lane_report(
     """
     validate_identifier(camera_id, name="camera_id")
 
-    since_dt = datetime.fromisoformat(since) if since else None
-    until_dt = datetime.fromisoformat(until) if until else None
+    try:
+        since_dt = _parse_dt(since)
+        until_dt = _parse_dt(until)
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid since/until datetime: {exc}") from None
 
     return _build_lane_report_rows(camera_id, since_dt, until_dt)
 
@@ -160,8 +171,11 @@ async def export_lane_report_csv(
     """Export per-lane statistics report as a downloadable CSV file."""
     validate_identifier(camera_id, name="camera_id")
 
-    since_dt = datetime.fromisoformat(since) if since else None
-    until_dt = datetime.fromisoformat(until) if until else None
+    try:
+        since_dt = _parse_dt(since)
+        until_dt = _parse_dt(until)
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid since/until datetime: {exc}") from None
 
     report = _build_lane_report_rows(camera_id, since_dt, until_dt)
 

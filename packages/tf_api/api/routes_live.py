@@ -1385,18 +1385,44 @@ def _start_pipeline(
                         if publisher is not None:
                             publisher.publish_live_state(camera_id, event_message)
                     for event in det.get("events", []) or []:
+                        prev_lane = event.get(
+                            "previous_lane_id", event.get("previous_stable_lane")
+                        )
+                        curr_lane = event.get(
+                            "current_lane_id", event.get("current_stable_lane")
+                        )
+                        frame_id_ev = event.get(
+                            "frame_id", event.get("frame", frame_idx)
+                        )
+                        # Persist for Events Log / reports (WS alone is not durable).
+                        if storage_worker is not None and curr_lane:
+                            try:
+                                storage_worker.enqueue_lane_change(
+                                    camera_id=camera_id,
+                                    job_id=f"live-{camera_id}",
+                                    track_id=int(event.get("track_id", -1)),
+                                    class_name=str(
+                                        event.get("class_name") or "unknown"
+                                    ),
+                                    previous_lane_id=prev_lane,
+                                    current_lane_id=str(curr_lane),
+                                    frame_id=int(frame_id_ev or frame_idx),
+                                    timestamp=datetime.now(timezone.utc),
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Failed to enqueue lane-change for %s",
+                                    camera_id,
+                                    exc_info=True,
+                                )
                         lane_message = {
                             "type": "lane_change_event",
                             "camera_id": camera_id,
                             "data": {
                                 **event,
-                                "previous_lane_id": event.get(
-                                    "previous_lane_id", event.get("previous_stable_lane")
-                                ),
-                                "current_lane_id": event.get(
-                                    "current_lane_id", event.get("current_stable_lane")
-                                ),
-                                "frame_id": event.get("frame_id", event.get("frame", frame_idx)),
+                                "previous_lane_id": prev_lane,
+                                "current_lane_id": curr_lane,
+                                "frame_id": frame_id_ev,
                             },
                         }
                         LiveEventBus.publish(camera_id, lane_message)

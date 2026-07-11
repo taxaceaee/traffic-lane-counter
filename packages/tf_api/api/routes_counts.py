@@ -356,10 +356,10 @@ async def get_counts_timeseries(
 @router.get("/{camera_id}/counts/recent")
 async def get_counts_recent(
     camera_id: str,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     _user: dict = Depends(get_current_user),
 ):
-    """Return the most recent crossing events for a camera."""
+    """Return the most recent track-count / crossing events for a camera."""
     validate_identifier(camera_id, name="camera_id")
 
     session = SessionLocal()

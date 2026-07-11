@@ -263,8 +263,14 @@ async function switchTab(tabId) {
     } else if (typeof stopLivePage === 'function') {
         stopLivePage();
     }
-    if (tabId === 'reports') { loadReportsData(); }
-    if (tabId === 'events') { loadEventsData(); }
+    if (tabId === 'reports') {
+        if (typeof populateSelectors === 'function') populateSelectors();
+        if (typeof loadReportsData === 'function') loadReportsData();
+    }
+    if (tabId === 'events') {
+        if (typeof populateSelectors === 'function') populateSelectors();
+        if (typeof loadEventsData === 'function') loadEventsData();
+    }
     if (tabId === 'settings') { loadSettings(); }
     if (tabId === 'users') { loadCurrentUserRole(); loadUsersData(); loadAuditData(); }
     if (tabId === 'lanes') {
@@ -387,12 +393,17 @@ function populateSelectors() {
         const el = document.getElementById(id);
         if (!el) return;
         const prev = el.value;
-        if (id === 'count-filter-camera' || id === 'events-cam-select') {
+        if (id === 'count-filter-camera') {
             el.innerHTML = '<option value="">— Select camera —</option>' + camOpts;
         } else {
             el.innerHTML = camOpts;
         }
-        if (prev && Array.from(el.options).some((o) => o.value === prev)) el.value = prev;
+        if (prev && Array.from(el.options).some((o) => o.value === prev)) {
+            el.value = prev;
+        } else if (id === 'events-cam-select' || id === 'reports-cam-select') {
+            // Default to first camera so Events/Reports show live DB data immediately.
+            if (camerasList.length) el.value = camerasList[0].camera_id;
+        }
     });
     const liveSelect = document.getElementById('live-cam-select');
     if (liveSelect && camerasList.length) {
