@@ -595,21 +595,21 @@ def _resolve_model_weights(model_section: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "weights": weights,
-        # imgsz may be raised later to native ROI / full-frame size.
-        "imgsz": model_section.get("imgsz", defaults.get("imgsz", 1280)),
-        "conf": model_section.get("conf_threshold", defaults.get("confidence", 0.25)),
-        "iou": model_section.get("iou_threshold", defaults.get("iou", 0.45)),
+        # imgsz may be raised later to native ROI, then capped by LIVE_MAX_IMGSZ.
+        "imgsz": model_section.get("imgsz", defaults.get("imgsz", 960)),
+        "conf": model_section.get("conf_threshold", defaults.get("confidence", 0.22)),
+        "iou": model_section.get("iou_threshold", defaults.get("iou", 0.50)),
         "class_mode": class_mode,
         "allowed_classes": model_section.get("allowed_classes", []),
         "half": model_section.get("half", defaults.get("half", True)),
-        # Detect every frame by default — max object recall for live traffic.
+        # Runtime every_n is overridden each frame by recommended_detect_every_n().
         "detect_every_n_frames": model_section.get(
             "detect_every_n_frames",
             defaults.get("detect_every_n_frames", 1),
         ),
         "roi_crop": model_section.get("roi_crop", defaults.get("roi_crop", True)),
         "max_detections": model_section.get(
-            "max_detections", defaults.get("max_detections", 500)
+            "max_detections", defaults.get("max_detections", 300)
         ),
         "roi_padding": model_section.get(
             "roi_padding", defaults.get("roi_padding", 80)

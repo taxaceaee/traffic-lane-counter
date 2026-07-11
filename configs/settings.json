@@ -1,8 +1,8 @@
 {
   "api_url": "http://localhost:8000",
   "detection": {
-    "confidence": 0.25,
-    "iou": 0.45,
+    "confidence": 0.22,
+    "iou": 0.50,
     "imgsz": 960,
     "half": true,
     "detect_every_n_frames": 1,

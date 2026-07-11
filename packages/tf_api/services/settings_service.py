@@ -21,8 +21,8 @@ _DEFAULTS: dict[str, Any] = {
     "detection": {
         # Realtime defaults for multi-cam laptop GPUs (recall still high via
         # LIVE_MAX_IMGSZ + ROI crop; cadence adapts via LIVE_RECALL_MODE=fps).
-        "confidence": 0.25,
-        "iou": 0.45,
+        "confidence": 0.22,
+        "iou": 0.50,
         "imgsz": 960,
         "half": True,
         "detect_every_n_frames": 1,

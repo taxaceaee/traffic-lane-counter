@@ -10,15 +10,15 @@ camera:
   allow_scaling: true
 model:
   model_id: yolo11n_coco
-  conf_threshold: 0.2
-  iou_threshold: 0.45
+  conf_threshold: 0.22
+  iou_threshold: 0.50
   allowed_classes:
   - car
   - motorcycle
   - truck
   - bus
   detect_every_n_frames: 1
-  max_detections: 500
+  max_detections: 300
   roi_padding: 120
   roi_crop: true
 tracking:

@@ -76,8 +76,8 @@ def load_and_validate_config(config_path: str | Path) -> dict[str, Any]:
     detector.setdefault("max_detections", 300)
     detector.setdefault("roi_crop", True)
     detector.setdefault("roi_padding", 80)
-    detector.setdefault("conf", 0.25)
-    detector.setdefault("iou", 0.45)
+    detector.setdefault("conf", 0.22)
+    detector.setdefault("iou", 0.50)
     detector.setdefault("class_mode", "coco_pretrained")
 
     if not isinstance(detector["weights"], str) or not detector["weights"]:

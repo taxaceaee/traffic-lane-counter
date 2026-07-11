@@ -9,8 +9,8 @@ from tf_core.io.config_loader import load_and_validate_config
 def test_settings_detection_defaults_are_realtime_balanced():
     d = get_detection_defaults()
     assert d["detect_every_n_frames"] == 1
-    assert d["confidence"] == 0.25
-    assert d["iou"] == 0.45
+    assert d["confidence"] == 0.22
+    assert d["iou"] == 0.50
     assert d["max_detections"] == 300
     assert int(d["imgsz"]) <= 960
     assert d["roi_crop"] is True
@@ -57,8 +57,8 @@ lanes: []
     cfg = load_and_validate_config(str(cfg_path))
     det = cfg["detector"]
     assert det["detect_every_n_frames"] == 1
-    assert float(det["conf"]) == 0.25
-    assert float(det["iou"]) == 0.45
+    assert float(det["conf"]) == 0.22
+    assert float(det["iou"]) == 0.50
     assert int(det["max_detections"]) == 300
     assert int(det["imgsz"]) == 960
 
