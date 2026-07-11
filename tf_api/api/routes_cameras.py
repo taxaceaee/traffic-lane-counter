@@ -1,6 +1,7 @@
 """Camera management API — list, get, create, delete camera configs."""
 
 import logging
+import os
 import shutil
 import struct
 import time
@@ -565,7 +566,7 @@ async def delete_camera(camera_id: str, _user: dict = Depends(require_admin)):
     if zones_lock_path.exists():
         zones_lock_path.unlink()
     # Remove storage directory
-    storage_dir = Path("storage") / camera_id
+    storage_dir = Path(os.getenv("STORAGE_ROOT", "data/storage")) / camera_id
     if storage_dir.exists():
         shutil.rmtree(storage_dir, ignore_errors=True)
     _snapshot_cache.pop(camera_id, None)

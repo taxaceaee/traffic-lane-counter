@@ -91,7 +91,7 @@ def _build_pipeline_config(camera_cfg: dict, app_cfg: dict) -> dict:
     })
 
     cfg.setdefault("storage", {
-        "storage_root": os.getenv("STORAGE_ROOT", "storage"),
+        "storage_root": os.getenv("STORAGE_ROOT", "data/storage"),
     })
 
     return cfg
@@ -145,7 +145,7 @@ def run_camera(camera_cfg: dict, app_cfg: dict) -> None:
         return
 
     camera_id = validate_identifier(camera_cfg.get("camera_id", "unknown"), "camera_id")
-    output_dir = safe_join(Path(os.getenv("OUTPUT_DIR", "outputs")), camera_id)
+    output_dir = safe_join(Path(os.getenv("OUTPUT_DIR", "data/outputs")), camera_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     import tempfile

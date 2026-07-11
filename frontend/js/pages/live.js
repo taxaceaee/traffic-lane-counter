@@ -63,10 +63,20 @@ async function _setProtectedImage(imgEl, url) {
     if (imgEl.dataset.sourceUrl === url && imgEl.dataset.objectUrl) return true;
     const token = localStorage.getItem('access_token');
     if (!token) return false;
+    // The snapshot request can finish after the same <img> has been switched
+    // to MJPEG.  Give every request a generation and refuse stale writes so a
+    // late snapshot response cannot overwrite the live stream URL.
+    const requestId = String((Number(imgEl.dataset.snapshotRequestId) || 0) + 1);
+    imgEl.dataset.snapshotRequestId = requestId;
     try {
         const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const blob = await res.blob();
+        if (!imgEl.isConnected
+            || imgEl.dataset.snapshotRequestId !== requestId
+            || imgEl.id !== 'live-snapshot-img') {
+            return false;
+        }
         const prevUrl = imgEl.dataset.objectUrl;
         if (prevUrl) URL.revokeObjectURL(prevUrl);
         const objectUrl = URL.createObjectURL(blob);
@@ -156,11 +166,13 @@ function _showSnapshot(container, cameraId) {
 let _mjpegRetryTimer = null;
 let _streamHealthTimer = null;
 let _mjpegCameraId = null;
+let _mjpegStreamGeneration = 0;
 
 async function _startMJPEGStream(cameraId) {
     const container = document.getElementById('live-video-container');
     if (!container) return;
     _mjpegCameraId = cameraId;
+    const streamGeneration = ++_mjpegStreamGeneration;
     clearTimeout(_mjpegRetryTimer);
     const token = localStorage.getItem('access_token');
     if (!token) {
@@ -176,56 +188,64 @@ async function _startMJPEGStream(cameraId) {
         if (!ticketResponse.ok) throw new Error('Stream ticket request failed');
         ticket = (await ticketResponse.json()).stream_token;
     } catch (err) {
+        if (_mjpegCameraId !== cameraId || streamGeneration !== _mjpegStreamGeneration) return;
         _showStreamError(cameraId, container);
         return;
     }
+    if (_mjpegCameraId !== cameraId || streamGeneration !== _mjpegStreamGeneration) return;
     const liveUrl = BASE_URL + '/live/' + encodeURIComponent(cameraId) + '/stream.mjpg?stream_token=' + encodeURIComponent(ticket);
 
-    // Direct <img> tag — browser requests MJPEG, pipeline auto-starts on server side
-    // This is the simplest and most reliable approach.
-    const existingSnapshot = container.querySelector('#live-snapshot-img');
-
-    if (existingSnapshot) {
-        // Replace snapshot src with MJPEG URL — same <img>, just change src
-        // If that doesn't work (browser may not switch from JPEG to multipart),
-        // fall back to replacing the whole inner HTML.
-        existingSnapshot.onerror = () => _showStreamError(cameraId, container);
-        existingSnapshot.src = liveUrl;
-        existingSnapshot.id = 'live-mjpeg-img';
-
-        // Update status badge
-        const badge = container.querySelector('.absolute.bottom-3');
-        if (badge) {
-            badge.innerHTML = `
+    // Always create a fresh image node.  Reusing the snapshot <img> after it
+    // has decoded a Blob URL is unreliable in Chrome: the multipart MJPEG
+    // response can stay open and produce output metrics while the old image
+    // decoder keeps rendering a blank frame.  A fresh node gets a clean image
+    // decoder and starts the multipart request exactly once.
+    container.innerHTML = `
+        <div class="relative w-full h-full">
+            <img class="w-full h-full rounded-xl object-contain bg-slate-950"
+                 alt="Live stream"
+                 id="live-mjpeg-img">
+            <div class="absolute top-3 left-3 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
                 <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
                 <span class="text-xs text-emerald-400">LIVE</span>
-            `;
-        }
-        lucide.createIcons();
+            </div>
+        </div>`;
+    lucide.createIcons();
 
-        // If after 10s the img hasn't updated (MJPEG stream not started), fallback
-        clearTimeout(_mjpegRetryTimer);
-        _mjpegRetryTimer = setTimeout(() => {
-            // Check if still showing snapshot (old image) — if so, pipeline failed
-            if (_mjpegCameraId !== cameraId) return;
-            _showStreamError(cameraId, container);
-        }, 10000);
-    } else {
-        // No existing snapshot img (shouldn't happen) — create fresh
-        container.innerHTML = `
-            <div class="relative w-full h-full">
-                <img class="w-full h-full rounded-xl object-contain bg-slate-950"
-                     src="${liveUrl}"
-                     alt="Live stream"
-                     id="live-mjpeg-img"
-                     onerror="_showStreamError('${cameraId}', document.getElementById('live-video-container'))">
-                <div class="absolute top-3 left-3 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                    <span class="text-xs text-emerald-400">LIVE</span>
-                </div>
-            </div>`;
-        lucide.createIcons();
+    const liveImg = container.querySelector('#live-mjpeg-img');
+    if (!liveImg) {
+        _showStreamError(cameraId, container);
+        return;
     }
+    liveImg.dataset.streamLoaded = 'false';
+    liveImg.onerror = () => {
+        if (_mjpegCameraId === cameraId && streamGeneration === _mjpegStreamGeneration) {
+            _showStreamError(cameraId, container);
+        }
+    };
+    liveImg.onload = () => {
+        if (_mjpegCameraId === cameraId && streamGeneration === _mjpegStreamGeneration) {
+            liveImg.dataset.streamLoaded = 'true';
+            clearTimeout(_mjpegRetryTimer);
+            _mjpegRetryTimer = null;
+        }
+    };
+
+    // Attach handlers before starting the request so a fast first response
+    // cannot beat the load/error listeners.
+    liveImg.src = liveUrl;
+
+    // Only fall back if no first MJPEG frame was received.  A healthy stream
+    // is left untouched indefinitely after its first successful decode.
+    clearTimeout(_mjpegRetryTimer);
+    _mjpegRetryTimer = setTimeout(() => {
+        const img = container.querySelector('#live-mjpeg-img');
+        if (_mjpegCameraId !== cameraId
+            || streamGeneration !== _mjpegStreamGeneration
+            || !img
+            || img.dataset.streamLoaded === 'true') return;
+        _showStreamError(cameraId, container);
+    }, 10000);
 }
 
 function _showStreamError(cameraId, container) {
