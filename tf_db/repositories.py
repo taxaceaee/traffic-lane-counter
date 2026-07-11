@@ -488,6 +488,46 @@ class SqlQueryRepository:
             for r in q.all()
         ]
 
+    def get_counts_hourly_from_events(
+        self,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[dict]:
+        """Bucket raw crossing events by hour (fallback when aggregates are empty)."""
+        from datetime import timedelta
+
+        from sqlalchemy import Integer, cast, func
+
+        if until is None:
+            until = datetime.now(timezone.utc)
+        if since is None:
+            since = until - timedelta(hours=24)
+
+        bind = self.session.get_bind()
+        dialect = getattr(getattr(bind, "dialect", None), "name", "sqlite") or "sqlite"
+        if dialect == "sqlite":
+            hour_expr = cast(func.strftime("%H", VehicleCountEvent.created_at), Integer)
+        else:
+            hour_expr = func.extract("hour", VehicleCountEvent.created_at)
+
+        q = self.session.query(
+            hour_expr.label("hour"),
+            func.count(VehicleCountEvent.id).label("count"),
+        ).filter(
+            VehicleCountEvent.created_at >= since,
+            VehicleCountEvent.created_at < until,
+        )
+        if camera_id:
+            q = q.filter(VehicleCountEvent.camera_id == camera_id)
+        q = q.group_by(hour_expr)
+
+        return [
+            {"hour": int(r.hour), "count": int(r.count or 0)}
+            for r in q.all()
+            if r.hour is not None
+        ]
+
 
 # ── LaneChangeRepository ────────────────────────────────────────────────────
 

@@ -193,11 +193,13 @@ async function switchTab(tabId) {
         await refreshData();
     }
 
-    if (tabId === 'dashboard') {
-        await renderDashboardCharts();
-    }
-
     updatePageHeader(tabId);
+
+    if (tabId === 'dashboard') {
+        startDashboardPolling();
+    } else {
+        stopDashboardPolling();
+    }
 
     if (tabId === 'alerts') {
         await refreshAlerts();
@@ -206,6 +208,7 @@ async function switchTab(tabId) {
         stopAlertPolling();
     }
     if (tabId === 'health') { startHealthPolling(); }
+    else { stopHealthPolling(); }
     if (tabId === 'counting') { applyCountingFilter(); }
     if (tabId === 'reports') { loadReportsData(); }
     if (tabId === 'events') { loadEventsData(); }
@@ -228,8 +231,6 @@ async function switchTab(tabId) {
         if (!camerasList.length) await refreshData();
         loadLanesConfigEditor();
     }
-
-    if (tabId !== 'health') { stopHealthPolling(); }
 }
 
 function updatePageHeader(tabId) {
