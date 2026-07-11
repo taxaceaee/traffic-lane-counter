@@ -60,7 +60,8 @@ class YoloByteTrackAdapter:
         return "cpu"
 
     def _track_kwargs(self) -> dict[str, Any]:
-        use_half = bool(self.detector.half) and self._device != "cpu" and not self._half_retry_disabled
+        # Do NOT pass half= here — Ultralytics 8.4+ deprecates it and spams
+        # warnings every frame. FP16 is applied once at model load (YoloDetectorWrapper).
         return {
             "persist": True,
             "imgsz": self.imgsz,
@@ -71,7 +72,6 @@ class YoloByteTrackAdapter:
             "classes": self.allowed_class_indices if self.allowed_class_indices else None,
             "verbose": False,
             "device": self._device,
-            "half": use_half,
         }
 
     def _run_track(self, frame: np.ndarray):
