@@ -196,7 +196,12 @@ async function switchTab(tabId) {
 
     updatePageHeader(tabId);
 
-    if (tabId === 'alerts') { await refreshAlerts(); }
+    if (tabId === 'alerts') {
+        await refreshAlerts();
+        startAlertPolling();
+    } else {
+        stopAlertPolling();
+    }
     if (tabId === 'health') { startHealthPolling(); }
     if (tabId === 'analytics') { loadAnalyticsData(); }
     if (tabId === 'counting') { applyCountingFilter(); }

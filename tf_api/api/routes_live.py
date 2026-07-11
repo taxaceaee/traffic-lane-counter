@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.responses import StreamingResponse
@@ -31,6 +32,7 @@ from starlette.responses import StreamingResponse
 from tf_api.api.routes_auth import decode_access_token, get_current_user, require_operator
 from tf_api.services.settings_service import get_detection_defaults, get_max_streams
 from tf_common.safe_path import validate_identifier
+from tf_common.live_errors import diagnose_stream_error
 from tf_core.config.loader import normalize_camera_config
 from tf_core.detection_core import DetectionCore
 from tf_core.roi import CropROI
@@ -313,6 +315,53 @@ def _request_stream_reload(camera_id: str) -> bool:
         return True
 
 
+def _record_source_failure(
+    camera_id: str,
+    source_type: str,
+    source: str,
+    exc: BaseException,
+    *,
+    status: str = "reconnecting",
+    stream_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Publish one structured source failure to metrics, alerts and logs."""
+    diagnostic = diagnose_stream_error(
+        exc,
+        source_type=source_type,
+        source=source,
+    )
+    from tf_common.alert_service import alert_service
+    from tf_common.monitoring.live_metrics import record_stream_state
+
+    record_stream_state(
+        camera_id,
+        status,
+        diagnostic["message"],
+        error_code=diagnostic["code"],
+        error_details=diagnostic,
+    )
+    if stream_meta is not None:
+        stream_meta["last_error_code"] = diagnostic["code"]
+        stream_meta["last_error_details"] = diagnostic
+        stream_meta["source_failure_seen"] = True
+    alert_service.emit(
+        diagnostic["severity"],
+        diagnostic["title"],
+        diagnostic["message"],
+        camera_id=camera_id,
+        alert_type="stream_source_error",
+        details=diagnostic,
+    )
+    logger.warning(
+        "Camera %s source failure code=%s type=%s: %s",
+        camera_id,
+        diagnostic["code"],
+        source_type,
+        type(exc).__name__,
+    )
+    return diagnostic
+
+
 def _start_pipeline(
     camera_id: str,
     cfg: dict[str, Any],
@@ -406,10 +455,17 @@ def _start_pipeline(
     )
     _last_det: dict[str, Any] | None = None
     _last_published_occupancy: dict[str, int] | None = None
+    # Unique track IDs seen during this live pipeline session, used to build
+    # Vehicle Types (Session) from actual detector class labels (not DB
+    # line-crossing aggregates, which stay empty without counting lines).
+    _session_class_counts: dict[str, int] = {}
+    _session_seen_track_ids: set[int] = set()
+    _last_published_vehicle_types: dict[str, int] | None = None
+    stream_meta["vehicle_types"] = {}
 
     def _capture_loop():
         nonlocal core, lanes, roi, _original_frame_w, _original_frame_h
-        nonlocal _last_det, _last_published_occupancy
+        nonlocal _last_det, _last_published_occupancy, _last_published_vehicle_types
         attempt = 0
         while not stop_event.is_set():
             try:
@@ -428,27 +484,40 @@ def _start_pipeline(
                 source_fps = float(getattr(reader, "get_fps", 0.0) or cfg.get("fps", 25) or 25.0)
                 stream_meta["source_fps"] = round(source_fps, 1)
                 attempt = 0  # reset after successful connect
-                record_stream_state(camera_id, "connecting")
-                # Resolve camera_offline alert (only if a previous offline was emitted)
-                if attempt > 0 or getattr(_capture_loop, "_was_offline", False):
-                    from tf_common.alert_service import alert_service as _as
-                    _as.resolve("camera_offline", camera_id)
-                _capture_loop._was_offline = False
-            except (OSError, ValueError, RuntimeError):
+                last_diagnostic = stream_meta.get("last_error_details")
+                if last_diagnostic:
+                    record_stream_state(
+                        camera_id,
+                        "connecting",
+                        last_diagnostic["message"],
+                        error_code=last_diagnostic["code"],
+                        error_details=last_diagnostic,
+                    )
+                else:
+                    record_stream_state(camera_id, "connecting")
+            except (OSError, ValueError, RuntimeError) as exc:
+                diagnostic = _record_source_failure(
+                    camera_id,
+                    source_type,
+                    source,
+                    exc,
+                    stream_meta=stream_meta,
+                )
                 attempt += 1
                 if attempt > _MAX_RECONNECT_ATTEMPTS:
                     logger.error("Camera %s: max reconnection attempts reached", camera_id)
+                    record_stream_state(
+                        camera_id,
+                        "error",
+                        "Camera source unavailable after reconnection attempts",
+                        error_code=diagnostic["code"],
+                        error_details=diagnostic,
+                    )
                     # Emit camera_offline alert
                     from tf_common.alert_service import alert_service as _as
                     _as.emit("critical", f"Camera Offline — {camera_id}",
                              f"Connection lost after {_MAX_RECONNECT_ATTEMPTS} attempts. Check source or network.",
                              camera_id=camera_id, alert_type="camera_offline")
-                    _capture_loop._was_offline = True
-                    record_stream_state(
-                        camera_id,
-                        "error",
-                        "Camera source unavailable after reconnection attempts",
-                    )
                     break
                 backoff = min(
                     _RECONNECT_BACKOFF_BASE * (2 ** (attempt - 1)),
@@ -458,7 +527,13 @@ def _start_pipeline(
                     "Camera %s: reconnection attempt %d/%d in %.1fs",
                     camera_id, attempt, _MAX_RECONNECT_ATTEMPTS, backoff,
                 )
-                record_stream_state(camera_id, "reconnecting", f"Connection attempt {attempt}/{_MAX_RECONNECT_ATTEMPTS}")
+                record_stream_state(
+                    camera_id,
+                    "reconnecting",
+                    f"{diagnostic['message']} Connection attempt {attempt}/{_MAX_RECONNECT_ATTEMPTS}.",
+                    error_code=diagnostic["code"],
+                    error_details=diagnostic,
+                )
                 time.sleep(backoff)
                 continue
 
@@ -502,6 +577,13 @@ def _start_pipeline(
                         read_failures += 1
                         if read_failures > 30:  # ~3 seconds of read failures
                             logger.warning("Camera %s: too many read failures, reconnecting", camera_id)
+                            _record_source_failure(
+                                camera_id,
+                                source_type,
+                                source,
+                                RuntimeError("camera reader returned no frame"),
+                                stream_meta=stream_meta,
+                            )
                             break
                         time.sleep(0.1)
                         continue
@@ -567,6 +649,12 @@ def _start_pipeline(
                     timing.update(_perf_timings.pop(camera_id, {}))
                     from tf_common.monitoring.live_metrics import record_frame
                     record_frame(camera_id, timing, source_fps=source_fps)
+                    if stream_meta.pop("source_failure_seen", False):
+                        from tf_common.alert_service import alert_service as _as
+                        _as.resolve("stream_source_error", camera_id)
+                        _as.resolve("camera_offline", camera_id)
+                        stream_meta.pop("last_error_code", None)
+                        stream_meta.pop("last_error_details", None)
 
                     # ── Extract crossing crops from clean frame BEFORE annotation ──
                     # This avoids annotating in-place then reading back annotated pixels
@@ -652,6 +740,30 @@ def _start_pipeline(
                             crop_bytes=crop_bytes,
                         )
 
+                    # ── Session vehicle types from raw track detections ──
+                    # Count each track_id once using the class_name emitted by
+                    # the detector/tracker. This powers Live → Vehicle Types
+                    # even when no counting line is configured (so DB crossing
+                    # events / count_event never fire).
+                    for track in det.get("frame_tracks") or det.get("tracks") or []:
+                        tid = track.get("track_id")
+                        cls = str(track.get("class_name") or "").strip().lower()
+                        if tid is None or not cls or cls == "unknown":
+                            continue
+                        try:
+                            tid_int = int(tid)
+                        except (TypeError, ValueError):
+                            continue
+                        if tid_int in _session_seen_track_ids:
+                            continue
+                        _session_seen_track_ids.add(tid_int)
+                        _session_class_counts[cls] = (
+                            _session_class_counts.get(cls, 0) + 1
+                        )
+
+                    vehicle_types = dict(_session_class_counts)
+                    stream_meta["vehicle_types"] = vehicle_types
+
                     # ── Publish live occupancy snapshot ────────────────
                     occupancy = det.get("occupancy", {}) or {}
                     # Publish an initial/changed snapshot even when the camera
@@ -660,6 +772,7 @@ def _start_pipeline(
                     # envelope (type/camera_id/data).
                     if (
                         _last_published_occupancy != occupancy
+                        or _last_published_vehicle_types != vehicle_types
                         or frame_idx % 10 == 0
                     ):
                         live_message = {
@@ -667,6 +780,7 @@ def _start_pipeline(
                             "camera_id": camera_id,
                             "data": {
                                 "occupancy": occupancy,
+                                "vehicle_types": vehicle_types,
                                 "frame_idx": frame_idx,
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
@@ -678,6 +792,7 @@ def _start_pipeline(
                             except Exception:
                                 logger.debug("Failed to publish live state for %s", camera_id, exc_info=True)
                         _last_published_occupancy = dict(occupancy)
+                        _last_published_vehicle_types = dict(vehicle_types)
 
                     # Publish crossing and lane-change events through Redis as
                     # well as the in-process bus. The latter only works when
@@ -914,7 +1029,124 @@ async def reload_live_pipeline(
 async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_user)):
     """Return real-time input/process/output FPS, latency, and GPU metrics."""
     from tf_common.monitoring.live_metrics import get_camera_metrics
-    return get_camera_metrics(camera_id)
+    result = get_camera_metrics(camera_id)
+    # Attach session vehicle-type tallies from the active live pipeline so the
+    # SPA can keep Vehicle Types (Session) fresh even if a WS frame is missed.
+    with _lock:
+        stream = _streams.get(camera_id)
+        if stream is not None:
+            meta = stream[2]
+            result["vehicle_types"] = dict(meta.get("vehicle_types") or {})
+    return result
+
+
+@router.post("/live/{camera_id}/verify-source")
+async def verify_live_source(
+    camera_id: str,
+    _user: dict = Depends(require_operator),
+):
+    """Verify the configured source without starting a second live pipeline.
+
+    YouTube extraction is deliberately executed in a worker thread because
+    yt-dlp performs blocking network and retry operations.  The endpoint does
+    not return the resolved HLS URL; it only reports whether extraction works.
+    """
+    validate_identifier(camera_id, name="camera_id")
+    cfg = _load_camera_config(camera_id)
+    if cfg is None:
+        raise HTTPException(404, f"Camera not found: {camera_id}")
+
+    source = str(cfg.get("source") or cfg.get("server", {}).get("source", ""))
+    source_type = str(
+        cfg.get("source_type")
+        or cfg.get("input", {}).get("source_type", "video")
+    )
+    if source_type not in {"youtube", "youtube_live"}:
+        from tf_common.monitoring.live_metrics import get_camera_metrics
+
+        current = get_camera_metrics(camera_id)
+        is_ok = current.get("status") in {"active", "connecting"}
+        return {
+            "ok": is_ok,
+            "camera_id": camera_id,
+            "diagnostic": {
+                "code": "SOURCE_STATUS_CHECKED",
+                "severity": "info" if is_ok else "warning",
+                "title": "Source status checked",
+                "message": (
+                    "Nguồn hiện đang có kết nối."
+                    if is_ok
+                    else "Chưa có frame hoạt động để xác minh nguồn này."
+                ),
+                "cause": current.get("error"),
+                "fix_steps": [],
+                "verify_steps": [
+                    "Theo dõi Process và Output FPS; giá trị phải lớn hơn 0 khi có frame.",
+                ],
+                "source_type": source_type,
+                "retryable": True,
+            },
+        }
+
+    try:
+        from tf_common.yt_utils import resolve_stream_info
+
+        await run_in_threadpool(
+            lambda: resolve_stream_info(
+                source,
+                fmt=cfg.get("input", {}).get("yt_format", "best[height<=720]"),
+                retries=1,
+                use_cache=False,
+                allow_stale_cache=False,
+            )
+        )
+    except Exception as exc:
+        diagnostic = diagnose_stream_error(
+            exc,
+            source_type=source_type,
+            source=source,
+        )
+        from tf_common.alert_service import alert_service
+        from tf_common.monitoring.live_metrics import record_stream_diagnostic
+
+        record_stream_diagnostic(camera_id, diagnostic)
+        alert_service.emit(
+            diagnostic["severity"],
+            diagnostic["title"],
+            diagnostic["message"],
+            camera_id=camera_id,
+            alert_type="stream_source_error",
+            details=diagnostic,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "camera_id": camera_id,
+                "diagnostic": diagnostic,
+            },
+            status_code=503,
+        )
+
+    diagnostic = {
+        "code": "YOUTUBE_SOURCE_VERIFIED",
+        "severity": "info",
+        "title": "YouTube source verified",
+        "message": "yt-dlp đã lấy được playable stream metadata từ nguồn YouTube.",
+        "cause": None,
+        "fix_steps": [],
+        "verify_steps": [
+            "Nếu video vẫn chưa hiện, bấm Retry stream để mở lại MJPEG pipeline.",
+            "Xác nhận Process và Output FPS lớn hơn 0.",
+        ],
+        "source_type": source_type,
+        "retryable": True,
+    }
+    from tf_common.monitoring.live_metrics import record_stream_diagnostic
+    from tf_common.alert_service import alert_service
+
+    record_stream_diagnostic(camera_id, diagnostic)
+    alert_service.resolve("stream_source_error", camera_id)
+    return {"ok": True, "camera_id": camera_id, "diagnostic": diagnostic}
 
 
 def _authorize_live_request(

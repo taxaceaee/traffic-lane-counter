@@ -18,3 +18,8 @@ def test_live_redis_messages_use_frontend_event_envelopes():
     assert '"current_lane_id": event.get(' in source
     assert "publisher.publish_live_state(camera_id, live_message)" in source
     assert "publisher.publish_live_state(camera_id, event_message)" in source
+    # Session vehicle types come from unique live tracks (raw detector classes).
+    assert '"vehicle_types": vehicle_types' in source
+    assert "_session_class_counts" in source
+    assert "_session_seen_track_ids" in source
+    assert 'result["vehicle_types"]' in source

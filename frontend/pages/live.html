@@ -53,6 +53,33 @@
                     <i data-lucide="video-off" class="h-10 w-10 text-slate-700 mb-3"></i>
                     <p class="text-sm">Select a camera and run an inference job to view the annotated stream.</p>
                 </div>
+                <div id="live-error-panel" class="hidden mt-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-left">
+                    <div class="flex items-start gap-3">
+                        <i data-lucide="shield-alert" class="h-5 w-5 text-rose-400 mt-0.5 flex-shrink-0"></i>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <p id="live-error-title" class="text-sm font-bold text-rose-300">Stream error</p>
+                                <span id="live-error-code" class="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20"></span>
+                            </div>
+                            <p id="live-error-message" class="text-xs text-slate-300 mt-1"></p>
+                            <p id="live-error-cause" class="text-xs text-slate-500 mt-1"></p>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
+                                <div>
+                                    <p class="text-[10px] uppercase font-bold text-amber-300 mb-1">Cách khắc phục</p>
+                                    <ol id="live-error-fixes" class="list-decimal list-inside space-y-1 text-[11px] text-slate-400"></ol>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] uppercase font-bold text-sky-300 mb-1">Cách xác minh</p>
+                                    <ol id="live-error-verification" class="list-decimal list-inside space-y-1 text-[11px] text-slate-400"></ol>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-2 mt-3">
+                                <button id="live-verify-source" onclick="verifyLiveSourceFromUI()" class="hidden text-[11px] px-2.5 py-1.5 rounded border border-sky-500/30 text-sky-300 hover:bg-sky-500/10">Verify source</button>
+                                <button onclick="loadLiveCameraData()" class="text-[11px] px-2.5 py-1.5 rounded border border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10">Retry stream</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Right stats column -->

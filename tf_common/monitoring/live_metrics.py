@@ -48,6 +48,8 @@ def _empty_store() -> dict[str, Any]:
         "stream_active": False,
         "status": "starting",
         "error": None,
+        "error_code": None,
+        "error_details": None,
         "last_frame_at": None,
     }
 
@@ -158,6 +160,8 @@ def record_frame(
         entry["stream_active"] = True
         entry["status"] = "active"
         entry["error"] = None
+        entry["error_code"] = None
+        entry["error_details"] = None
         entry["last_frame_at"] = time.time()
         entry["process_timestamps"].append(now)
         entry["latencies_ms"].append(total_ms)
@@ -197,7 +201,14 @@ def record_output_frame(camera_id: str) -> None:
         entry["output_fps"] = _window_fps(entry["output_timestamps"])
 
 
-def record_stream_state(camera_id: str, status: str, error: str | None = None) -> None:
+def record_stream_state(
+    camera_id: str,
+    status: str,
+    error: str | None = None,
+    *,
+    error_code: str | None = None,
+    error_details: dict[str, Any] | None = None,
+) -> None:
     """Record a lifecycle state for a live camera pipeline."""
     allowed = {"starting", "connecting", "active", "reconnecting", "error", "stopped"}
     if status not in allowed:
@@ -208,7 +219,23 @@ def record_stream_state(camera_id: str, status: str, error: str | None = None) -
         entry = _store[camera_id]
         entry["status"] = status
         entry["error"] = error
+        entry["error_code"] = error_code
+        entry["error_details"] = error_details
         entry["stream_active"] = status in {"starting", "connecting", "active", "reconnecting"}
+
+
+def record_stream_diagnostic(
+    camera_id: str,
+    diagnostic: dict[str, Any],
+) -> None:
+    """Attach a verification diagnostic without changing stream lifecycle state."""
+    with _lock:
+        if camera_id not in _store:
+            _store[camera_id] = _empty_store()
+        entry = _store[camera_id]
+        entry["error"] = diagnostic.get("message")
+        entry["error_code"] = diagnostic.get("code")
+        entry["error_details"] = diagnostic
 
 
 def record_stream_stopped(camera_id: str) -> None:
@@ -244,6 +271,8 @@ def get_camera_metrics(camera_id: str) -> dict[str, Any]:
                 "stream_active": False,
                 "status": "stopped",
                 "error": None,
+                "error_code": None,
+                "error_details": None,
                 "last_frame_at": None,
             }
         entry = _store[camera_id]
@@ -260,6 +289,8 @@ def get_camera_metrics(camera_id: str) -> dict[str, Any]:
             "stream_active": entry["stream_active"],
             "status": entry.get("status", "starting"),
             "error": entry.get("error"),
+            "error_code": entry.get("error_code"),
+            "error_details": entry.get("error_details"),
             "last_frame_at": entry.get("last_frame_at"),
         }
 

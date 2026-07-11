@@ -46,6 +46,7 @@ class AlertService:
         camera_id: str | None = None,
         alert_type: str = "general",
         suppress_if_active: bool = True,
+        details: dict[str, Any] | None = None,
     ) -> str | None:
         """Emit an alert. Returns the alert id, or None if suppressed.
 
@@ -69,6 +70,7 @@ class AlertService:
                 "timestamp": time.time(),
                 "resolved": False,
                 "resolved_at": None,
+                "details": dict(details or {}),
             }
             self._alerts.append(alert)
             self._suppressed[dedup_key] = alert_id

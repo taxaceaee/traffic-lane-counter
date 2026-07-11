@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import time
 from typing import Any
@@ -44,8 +45,33 @@ def build_ydl_opts(
     cookies_browser = os.environ.get("YOUTUBE_COOKIES_FROM_BROWSER")
     if cookies_browser and cookies_browser.strip():
         browser = cookies_browser.strip()
-        opts["cookiesfrombrowser"] = (browser,)
+        # yt-dlp's Python API expects (browser, profile, keyring, container),
+        # while the environment-friendly form is "chrome:Default".
+        browser_name, separator, profile = browser.partition(":")
+        opts["cookiesfrombrowser"] = (
+            browser_name,
+            profile if separator and profile else None,
+            None,
+            None,
+        )
         logger.info("YouTube cookies from browser: %s", browser)
+
+    # YouTube now requires a JS challenge solver for full extraction. Node is
+    # already part of the local development toolchain, so enable it when
+    # present. The remote EJS component is allowed by default because yt-dlp
+    # ships the solver core but not the frequently updated challenge library.
+    node_path = shutil.which("node")
+    if node_path:
+        opts["js_runtimes"] = {"node": {"path": node_path}}
+    remote_components = os.environ.get("YTDLP_REMOTE_COMPONENTS", "ejs:github")
+    opts["remote_components"] = [
+        item.strip() for item in remote_components.split(",") if item.strip()
+    ]
+    pot_port = os.environ.get("YTDLP_BGUTIL_PORT", "4416").strip()
+    if pot_port != "4416":
+        opts.setdefault("extractor_args", {}).setdefault(
+            "youtubepot-bgutilhttp", {}
+        )["base_url"] = [f"http://127.0.0.1:{pot_port}"]
 
     if overrides:
         opts.update(overrides)

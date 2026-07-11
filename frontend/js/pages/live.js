@@ -38,6 +38,10 @@ function renderLaneChanges(changes) {
     `).join('');
 }
 
+function _emptySessionCounts() {
+    return { car: 0, motorcycle: 0, motorbike: 0, truck: 0, bus: 0 };
+}
+
 function updateVehicleTypeDisplay() {
     const car = (_sessionCounts.car || 0);
     const moto = (_sessionCounts.motorcycle || 0) + (_sessionCounts.motorbike || 0);
@@ -56,6 +60,31 @@ function updateVehicleTypeDisplay() {
     barEl('live-type-moto-bar', (moto / total * 100) + '%');
     barEl('live-type-truck-bar', (truck / total * 100) + '%');
     barEl('live-type-bus-bar', (bus / total * 100) + '%');
+}
+
+// True after the live pipeline has published absolute vehicle_types at least
+// once for the current camera. When set, ignore count_event increments so
+// line-crossing events cannot double-count on top of unique-track tallies.
+let _hasLiveVehicleTypes = false;
+
+/**
+ * Apply absolute session vehicle-type tallies from the live pipeline.
+ * Keys are detector class names (car, motorcycle, truck, bus, …).
+ * Replaces local counters so UI matches real unique-track session counts.
+ */
+function applySessionVehicleTypes(types) {
+    if (!types || typeof types !== 'object') return;
+    const next = _emptySessionCounts();
+    Object.entries(types).forEach(([type, count]) => {
+        const key = String(type || '').toLowerCase().trim();
+        if (!key) return;
+        const n = Number(count);
+        if (!Number.isFinite(n) || n < 0) return;
+        next[key] = (next[key] || 0) + n;
+    });
+    _sessionCounts = next;
+    _hasLiveVehicleTypes = true;
+    updateVehicleTypeDisplay();
 }
 
 async function _setProtectedImage(imgEl, url) {
@@ -97,7 +126,11 @@ async function loadLiveCameraData() {
     _lastLiveCam = camera_id;
     localStorage.setItem('live_camera_id', camera_id);
 
-    _sessionCounts = { car: 0, motorcycle: 0, motorbike: 0, truck: 0, bus: 0 };
+    // Reset until live pipeline publishes real session tallies. Historical
+    // counts/summary is 24h line-crossing data — not "Session" and often empty
+    // when no counting line is configured.
+    _sessionCounts = _emptySessionCounts();
+    _hasLiveVehicleTypes = false;
     updateVehicleTypeDisplay();
 
     // Step 1: Show camera snapshot immediately while data loads
@@ -106,22 +139,19 @@ async function loadLiveCameraData() {
         _showSnapshot(container, camera_id);
     }
 
-    // Step 2: Fetch occupancy, summary, lane changes in parallel
-    const [occ, summary, changes] = await Promise.all([
+    // Step 2: Fetch occupancy, live metrics (session vehicle types), lane changes
+    const [occ, metrics, changes] = await Promise.all([
         apiRequest(`/api/cameras/${camera_id}/occupancy/latest`),
-        apiRequest(`/api/cameras/${camera_id}/counts/summary`),
+        apiRequest('/live/' + encodeURIComponent(camera_id) + '/metrics'),
         apiRequest(`/api/cameras/${camera_id}/lane-changes?limit=5`),
     ]);
 
     renderLiveOccupancy(occ ? occ.occupancy : null);
 
-    if (summary && summary.lanes) {
-        summary.lanes.forEach(l => {
-            Object.entries(l.types || {}).forEach(([type, count]) => {
-                _sessionCounts[type] = (_sessionCounts[type] || 0) + count;
-            });
-        });
-        updateVehicleTypeDisplay();
+    // Prefer absolute session tallies from the running pipeline (unique tracks
+    // by detector class_name). Available once the stream has processed frames.
+    if (metrics && metrics.vehicle_types) {
+        applySessionVehicleTypes(metrics.vehicle_types);
     }
 
     // Step 3: Render lane changes (uses previous_lane_id/current_lane_id from backend)
@@ -284,6 +314,74 @@ function _showStreamError(cameraId, container) {
     }, 10000);
 }
 
+function renderLiveErrorDiagnostic(diagnostic) {
+    const panel = document.getElementById('live-error-panel');
+    if (!panel) return;
+    if (!diagnostic || !diagnostic.code) {
+        panel.classList.add('hidden');
+        return;
+    }
+
+    const set = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = value;
+    };
+    set('live-error-title', escapeHtml(diagnostic.title || 'Stream error'));
+    set('live-error-code', escapeHtml(diagnostic.code));
+    set('live-error-message', escapeHtml(diagnostic.message || 'The camera source is unavailable.'));
+    set('live-error-cause', diagnostic.cause ? '<span class="font-semibold text-slate-400">Nguyên nhân:</span> ' + escapeHtml(diagnostic.cause) : '');
+    set('live-error-fixes', (diagnostic.fix_steps || []).map(step => '<li>' + escapeHtml(step) + '</li>').join(''));
+    const verificationCommand = diagnostic.verification_command
+        ? '<code class="block mt-2 p-2 rounded bg-slate-950 text-[10px] text-sky-300 break-all">' + escapeHtml(diagnostic.verification_command) + '</code>'
+        : '';
+    set('live-error-verification', (diagnostic.verify_steps || []).map(step => '<li>' + escapeHtml(step) + '</li>').join('') + verificationCommand);
+
+    const verifyButton = document.getElementById('live-verify-source');
+    const role = localStorage.getItem('user_role');
+    const canVerify = ['admin', 'operator', 'Administrator'].includes(role)
+        && ['youtube', 'youtube_live'].includes(diagnostic.source_type);
+    if (verifyButton) verifyButton.classList.toggle('hidden', !canVerify);
+
+    const isInfo = diagnostic.severity === 'info' || diagnostic.code === 'YOUTUBE_SOURCE_VERIFIED';
+    panel.className = isInfo
+        ? 'mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 text-left'
+        : 'mt-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-left';
+    panel.classList.remove('hidden');
+    lucide.createIcons();
+}
+
+async function verifyLiveSourceFromUI() {
+    const cameraId = _lastLiveCam;
+    if (!cameraId) return;
+    const button = document.getElementById('live-verify-source');
+    if (button) {
+        button.disabled = true;
+        button.innerText = 'Verifying...';
+    }
+    try {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(
+            BASE_URL + '/live/' + encodeURIComponent(cameraId) + '/verify-source',
+            {method: 'POST', headers: {Authorization: 'Bearer ' + (token || '')}},
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (payload.diagnostic) renderLiveErrorDiagnostic(payload.diagnostic);
+        if (!response.ok || !payload.ok) {
+            showToast({severity: 'warning', title: 'Source verification failed', message: payload.diagnostic?.message || 'Could not verify source.'});
+            return;
+        }
+        showToast({severity: 'info', title: 'Source verified', message: 'yt-dlp can resolve this YouTube source. Retrying video stream.'});
+        _startMJPEGStream(cameraId);
+    } catch (e) {
+        showToast({severity: 'warning', title: 'Verification error', message: e.message || 'Could not verify source.'});
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerText = 'Verify source';
+        }
+    }
+}
+
 function _monitorStream(cameraId) {
     if (_streamHealthTimer) clearInterval(_streamHealthTimer);
     _streamHealthTimer = setInterval(async () => {
@@ -295,10 +393,11 @@ function _monitorStream(cameraId) {
             const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
             const statusEl = document.getElementById('live-stream-status');
             if (!statusEl) return;
+            renderLiveErrorDiagnostic(m && m.error_details);
             if (m && m.status === 'error') {
-                statusEl.textContent = m.error || 'Pipeline error';
+                statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Pipeline error');
             } else if (m && m.status === 'reconnecting') {
-                statusEl.textContent = m.error || 'Reconnecting camera...';
+                statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Reconnecting camera...');
             } else if (m && m.process_fps !== undefined && m.process_fps > 0) {
                 const inFps = m.source_fps > 0 ? m.source_fps.toFixed(1) : '0.0';
                 const procFps = m.process_fps.toFixed(1);
@@ -328,6 +427,7 @@ function startLiveMetricsPolling(cameraId) {
         try {
             const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
             const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+            renderLiveErrorDiagnostic(m && m.error_details);
             if (!m || (m.process_fps === undefined && !m.avg_latency_ms)) {
                 set('live-input-fps', 'Idle');
                 set('live-fps', 'Idle');
@@ -341,6 +441,9 @@ function startLiveMetricsPolling(cameraId) {
             set('live-output-fps', m.output_fps > 0 ? m.output_fps.toFixed(1) : '—');
             set('live-latency', m.avg_latency_ms > 0 ? m.avg_latency_ms.toFixed(0) + 'ms' : '—');
             set('live-gpu', m.gpu_available && m.gpu_util_pct >= 0 ? m.gpu_util_pct.toFixed(0) + '%' : 'N/A');
+            if (m.vehicle_types) {
+                applySessionVehicleTypes(m.vehicle_types);
+            }
         } catch(e) {}
     }, 2000);
 }
@@ -371,12 +474,20 @@ function connectLiveWS(cameraId) {
                 if (msg.type === 'connected') return;
 
                 if (msg.type === 'occupancy_update' && activeTab === 'live') {
-                    const occData = msg.data && msg.data.occupancy ? msg.data.occupancy : msg.data;
+                    const payload = msg.data || {};
+                    const occData = payload.occupancy != null ? payload.occupancy : payload;
                     renderLiveOccupancy(occData);
+                    // Absolute session tallies from unique live tracks.
+                    if (payload.vehicle_types) {
+                        applySessionVehicleTypes(payload.vehicle_types);
+                    }
                 }
 
-                if (msg.type === 'count_event' && activeTab === 'live') {
-                    const cls = (msg.data.class_name || '').toLowerCase();
+                // Fallback for older servers that only emit count_event and
+                // never attach absolute vehicle_types on occupancy_update.
+                if (msg.type === 'count_event' && activeTab === 'live' && !_hasLiveVehicleTypes) {
+                    const payload = msg.data || {};
+                    const cls = String(payload.class_name || payload.vehicle_type || '').toLowerCase();
                     if (cls) {
                         _sessionCounts[cls] = (_sessionCounts[cls] || 0) + 1;
                         updateVehicleTypeDisplay();
