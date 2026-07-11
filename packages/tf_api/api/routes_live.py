@@ -137,13 +137,40 @@ def recommended_detect_every_n(*, viewers: int, always_on: bool) -> int:
 
 
 def _live_max_imgsz() -> int:
-    """Cap YOLO imgsz for realtime. Default 960 (laptop multi-cam). 0 = no cap."""
-    raw = os.getenv("LIVE_MAX_IMGSZ", "960").strip()
-    try:
-        v = int(raw)
-    except ValueError:
-        return 960
-    return v  # 0 = no cap
+    """Cap YOLO imgsz for realtime. Default 960 (laptop multi-cam). 0 = no cap.
+
+    Under multi-cam load, automatically step down (960 → 800 → 640) so process
+    FPS recovers before raising detect_every_n further. Override with LIVE_MAX_IMGSZ.
+    """
+    raw = os.getenv("LIVE_MAX_IMGSZ", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            return 960
+    load = max(1, _count_active_pipelines())
+    if load >= 3:
+        return 640
+    if load >= 2:
+        return 800
+    return 960
+
+
+def _live_capture_target_fps(*, viewers: int = 0) -> float:
+    """Decode budget: do not pull full source FPS when process is slower.
+
+    Highest free CPU win for multi always-on — drops FFmpeg work after decode
+    is wasted into maxsize=1 queues.
+    """
+    load = max(1, _count_active_pipelines())
+    base = float(os.getenv("LIVE_CAPTURE_FPS", "12"))
+    if load >= 3:
+        base = min(base, 8.0)
+    elif load >= 2:
+        base = min(base, 10.0)
+    if viewers <= 0:
+        base = min(base, float(os.getenv("LIVE_HEADLESS_CAPTURE_FPS", "10")))
+    return max(4.0, base)
 
 
 def _preview_encode_max_edge() -> int:
@@ -593,6 +620,19 @@ def _resolve_model_weights(model_section: dict[str, Any]) -> dict[str, Any]:
                 class_mode = _m.get("class_mode", class_mode)
                 break
 
+    half = bool(model_section.get("half", defaults.get("half", True)))
+    half_env = os.getenv("HALF_PRECISION", "").strip().lower()
+    if half_env in {"0", "false", "no", "off"}:
+        half = False
+    elif half_env in {"1", "true", "yes", "on"}:
+        half = True
+
+    max_det = int(
+        model_section.get("max_detections", defaults.get("max_detections", 300))
+    )
+    if max(1, _count_active_pipelines()) >= 3:
+        max_det = min(max_det, int(os.getenv("LIVE_MAX_DET", "150")))
+
     return {
         "weights": weights,
         # imgsz may be raised later to native ROI, then capped by LIVE_MAX_IMGSZ.
@@ -601,16 +641,14 @@ def _resolve_model_weights(model_section: dict[str, Any]) -> dict[str, Any]:
         "iou": model_section.get("iou_threshold", defaults.get("iou", 0.50)),
         "class_mode": class_mode,
         "allowed_classes": model_section.get("allowed_classes", []),
-        "half": model_section.get("half", defaults.get("half", True)),
+        "half": half,
         # Runtime every_n is overridden each frame by recommended_detect_every_n().
         "detect_every_n_frames": model_section.get(
             "detect_every_n_frames",
             defaults.get("detect_every_n_frames", 1),
         ),
         "roi_crop": model_section.get("roi_crop", defaults.get("roi_crop", True)),
-        "max_detections": model_section.get(
-            "max_detections", defaults.get("max_detections", 300)
-        ),
+        "max_detections": max_det,
         "roi_padding": model_section.get(
             "roi_padding", defaults.get("roi_padding", 80)
         ),
@@ -642,7 +680,10 @@ def _cfg_to_pipeline_dict(cfg: dict[str, Any], camera_cfg_path: Path | None = No
         "smoothing": {
             "method": "hybrid",
             "history_window": 5,
-            "min_consecutive_for_change": 1,
+            # ≥2 consecutive votes before stable lane (reduces flip/double-count).
+            "min_consecutive_for_change": int(
+                tracking.get("min_consecutive_for_change", 2)
+            ),
         },
         "lane_assignment": {
             "boundary_mode": "inside_or_on_edge",
@@ -651,7 +692,7 @@ def _cfg_to_pipeline_dict(cfg: dict[str, Any], camera_cfg_path: Path | None = No
         },
         "counting": {
             "min_cross_distance_px": counting.get("min_cross_distance_px", 2.0),
-            "count_unstable_lane": True,
+            "count_unstable_lane": bool(counting.get("count_unstable_lane", False)),
         },
         "roi_padding": detector.get("roi_padding", 80),
         "lanes": lanes,
@@ -819,10 +860,16 @@ def _start_pipeline(
 
     storage_root = Path(os.getenv("STORAGE_ROOT", "data/storage")) / camera_id
     storage_root.mkdir(parents=True, exist_ok=True)
+    # Live path already forces crop_bytes=None — skip LocalCropStorage and
+    # roll only hour/day aggregates (minute windows bloat SQLite under multi-cam).
     storage_worker = StorageWorker(
         storage_root=storage_root,
         adapter_factory=lambda: make_server_adapters(SessionLocal()),
         publisher=publisher,
+        config={
+            "save_vehicle_crop": False,
+            "aggregate_windows": ["1hour", "1day"],
+        },
     )
 
     # Latest-frame only: size 1 keeps latency low and avoids backlog stutter.
@@ -966,13 +1013,15 @@ def _start_pipeline(
             try:
                 from tf_worker.io.video_io import get_video_reader
 
+                viewers_now = int(stream_meta.get("connections") or 0)
                 reader = get_video_reader(
                     source,
                     {
                         "input": {
                             "source_type": source_type,
                             "fps": cfg.get("fps", 25),
-                            "target_fps": cfg.get("fps", 25),
+                            # Decode budget ≠ source fps (see _live_capture_target_fps).
+                            "target_fps": _live_capture_target_fps(viewers=viewers_now),
                         }
                     },
                 )
@@ -1291,10 +1340,14 @@ def _start_pipeline(
                     # is empty. The old truthy-only check left the UI stale at
                     # zero and the Redis payload lacked the frontend event
                     # envelope (type/camera_id/data).
+                    # Publish on change, plus ≤1 Hz heartbeat (not every 10 frames).
+                    now_pub = time.monotonic()
+                    last_occ_pub = float(stream_meta.get("_last_occ_pub_mono") or 0.0)
+                    heartbeat_due = (now_pub - last_occ_pub) >= 1.0
                     if (
                         _last_published_occupancy != occupancy
                         or _last_published_vehicle_types != vehicle_types
-                        or frame_idx % 10 == 0
+                        or heartbeat_due
                     ):
                         live_message = {
                             "type": "occupancy_update",
@@ -1314,6 +1367,7 @@ def _start_pipeline(
                                 logger.debug("Failed to publish live state for %s", camera_id, exc_info=True)
                         _last_published_occupancy = dict(occupancy)
                         _last_published_vehicle_types = dict(vehicle_types)
+                        stream_meta["_last_occ_pub_mono"] = now_pub
 
                     # Publish crossing and lane-change events through Redis as
                     # well as the in-process bus. The latter only works when

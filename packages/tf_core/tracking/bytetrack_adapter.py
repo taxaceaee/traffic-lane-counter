@@ -10,11 +10,17 @@ Realtime notes
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import numpy as np
 
 from tf_core.detection.yolo_detector import YoloDetectorWrapper
+
+# Multi-cam always-on shares one YOLO via ModelRegistry. Ultralytics
+# ``track(persist=True)`` is not re-entrant — serialize GPU forwards so
+# concurrent capture threads do not thrash the shared predictor.
+_INFERENCE_LOCK = threading.Lock()
 
 
 class YoloByteTrackAdapter:
@@ -76,22 +82,23 @@ class YoloByteTrackAdapter:
 
     def _run_track(self, frame: np.ndarray):
         kwargs = self._track_kwargs()
-        try:
-            return self.detector.model.track(source=frame, **kwargs)
-        except RuntimeError as exc:
-            err = str(exc)
-            dtype_mismatch = "same dtype" in err or "Half !=" in err or "c10::Half" in err
-            if not self.detector.half or self._half_retry_disabled or not dtype_mismatch:
-                raise
-            # Some CUDA/Ultralytics builds fail after model.half() fuse — once-only FP32 fallback.
-            self._half_retry_disabled = True
-            self.detector.half = False
-            self.detector.model.model.float()
-            predictor = getattr(self.detector.model, "predictor", None)
-            if predictor is not None:
-                predictor.model = None
-            kwargs = self._track_kwargs()
-            return self.detector.model.track(source=frame, **kwargs)
+        with _INFERENCE_LOCK:
+            try:
+                return self.detector.model.track(source=frame, **kwargs)
+            except RuntimeError as exc:
+                err = str(exc)
+                dtype_mismatch = "same dtype" in err or "Half !=" in err or "c10::Half" in err
+                if not self.detector.half or self._half_retry_disabled or not dtype_mismatch:
+                    raise
+                # Some CUDA/Ultralytics builds fail after model.half() fuse — once-only FP32 fallback.
+                self._half_retry_disabled = True
+                self.detector.half = False
+                self.detector.model.model.float()
+                predictor = getattr(self.detector.model, "predictor", None)
+                if predictor is not None:
+                    predictor.model = None
+                kwargs = self._track_kwargs()
+                return self.detector.model.track(source=frame, **kwargs)
 
     def _clear_cache(self) -> None:
         self._cached_tracks = []

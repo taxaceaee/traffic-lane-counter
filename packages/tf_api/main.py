@@ -49,6 +49,21 @@ from tf_common.monitoring import metrics
 # Setup structured logging once
 setup_logging()
 
+# Multi-cam always-on: avoid OpenCV/torch CPU thread oversubscription fighting
+# FFmpeg decode + YOLO postprocess (override via env).
+try:
+    import cv2 as _cv2
+
+    _cv2.setNumThreads(int(os.getenv("OPENCV_NUM_THREADS", "1")))
+except Exception:
+    pass
+try:
+    import torch as _torch
+
+    _torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+except Exception:
+    pass
+
 logger = logging.getLogger("trafficflow_server")
 
 API_KEY = os.getenv("API_KEY", "")

@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,10 @@ from tf_db.storage.crop_protocol import CropStorage
 from tf_db.storage.pubsub_protocol import StreamPublisher
 
 logger = logging.getLogger("trafficflow.storage")
+
+# Batch writes: fewer SQLite commits under multi-cam always-on.
+_BATCH_MAX = max(1, int(os.getenv("STORAGE_BATCH_MAX", "32")))
+_BATCH_MS = max(0.0, float(os.getenv("STORAGE_BATCH_MS", "0.05")))
 
 
 def _floor_to_window(dt: datetime, minutes: int) -> datetime:
@@ -129,7 +135,9 @@ class StorageWorker:
                 max_px=int(cfg.get("crop_max_px", 320)),
             )
 
-        self.agg_windows: list[str] = cfg.get("aggregate_windows", ["1min", "5min", "1hour", "1day"])
+        self.agg_windows: list[str] = cfg.get(
+            "aggregate_windows", ["1hour", "1day"]
+        )
 
         self._queue: Queue = Queue(maxsize=queue_maxsize)
         self._stop = threading.Event()
@@ -275,6 +283,38 @@ class StorageWorker:
             if len(self._dead_letter) < _DEAD_LETTER_MAX:
                 self._dead_letter.append(payload)
 
+    def _ensure_adapter(self) -> bool:
+        if self.adapter is not None:
+            return True
+        if self._adapter_factory is None:
+            return True
+        try:
+            self.adapter = self._adapter_factory()
+            return True
+        except Exception:
+            logger.exception("StorageWorker: failed to create persistence adapter")
+            return False
+
+    def _collect_batch(self, first: dict[str, Any]) -> list[dict[str, Any]]:
+        """Gather more queue items up to BATCH_MAX within BATCH_MS."""
+        batch = [first]
+        deadline = time.monotonic() + _BATCH_MS
+        while len(batch) < _BATCH_MAX:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                nxt = self._queue.get(timeout=remaining)
+            except Empty:
+                break
+            if nxt is None:
+                # Re-signal stop for the outer loop.
+                with contextlib.suppress(Exception):
+                    self._queue.put_nowait(None)
+                break
+            batch.append(nxt)
+        return batch
+
     def _worker_loop(self) -> None:
         while True:
             try:
@@ -285,42 +325,45 @@ class StorageWorker:
                 continue
             if item is None:
                 break
-            if self.adapter is None and self._adapter_factory is not None:
-                try:
-                    self.adapter = self._adapter_factory()
-                except Exception:
-                    self.total_errors += 1
-                    self._append_dead_letter(item)
-                    logger.exception("StorageWorker: failed to create persistence adapter")
-                    continue
-            try:
-                self._process(item)
-                self.total_processed += 1
-            except Exception as exc:
+            if not self._ensure_adapter():
                 self.total_errors += 1
                 self._append_dead_letter(item)
+                continue
+            batch = self._collect_batch(item)
+            try:
+                self._process_batch(batch)
+                self.total_processed += len(batch)
+            except Exception as exc:
+                self.total_errors += len(batch)
+                for p in batch:
+                    self._append_dead_letter(p)
                 rollback = getattr(self.adapter, "rollback", None)
                 if callable(rollback):
                     with contextlib.suppress(Exception):
                         rollback()
                 logger.warning(
-                    "StorageWorker: error processing event (%s) — dropping: %s",
+                    "StorageWorker: error processing batch of %d (%s) — dropping: %s",
+                    len(batch),
                     type(exc).__name__,
                     exc,
                 )
 
-        # Drain remaining items (each _process commits itself)
+        # Drain remaining items
+        drain: list[dict[str, Any]] = []
         while not self._queue.empty():
             try:
                 item = self._queue.get_nowait()
                 if item is not None:
-                    try:
-                        self._process(item)
-                        self.total_processed += 1
-                    except Exception:
-                        self.total_errors += 1
+                    drain.append(item)
             except Empty:
                 break
+        if drain:
+            if self._ensure_adapter():
+                try:
+                    self._process_batch(drain)
+                    self.total_processed += len(drain)
+                except Exception:
+                    self.total_errors += len(drain)
 
         if self.adapter is not None:
             with contextlib.suppress(Exception):
@@ -331,6 +374,116 @@ class StorageWorker:
             self.total_processed, self.total_errors, self.dropped_events,
             len(self._dead_letter),
         )
+
+    def _process_batch(self, batch: list[dict[str, Any]]) -> None:
+        """Persist a batch under one SQLite write lock + single commit."""
+        if len(batch) == 1:
+            self._process(batch[0])
+            return
+        # Crops outside the DB lock.
+        prepared: list[tuple[dict[str, Any], str | None]] = []
+        for payload in batch:
+            if payload.get("kind") == "lane_change":
+                prepared.append((payload, None))
+                continue
+            crop_path: str | None = None
+            crop_bytes = payload.get("crop_bytes")
+            if self.crop_storage is not None and crop_bytes is not None:
+                try:
+                    crop_path = self.crop_storage.save(
+                        camera_id=payload["camera_id"],
+                        lane_id=payload["lane_id"],
+                        vehicle_type=payload["vehicle_type"],
+                        track_id=payload["track_id"],
+                        timestamp=payload["timestamp"],
+                        crop_bytes=crop_bytes,
+                        bbox=payload.get("bbox"),
+                    )
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "StorageWorker: crop save failed (%s) for frame_id=%s",
+                        type(exc).__name__, payload.get("frame_id"),
+                    )
+            prepared.append((payload, crop_path))
+
+        if self.adapter is not None:
+            from tf_db.session import commit_with_retry, db_write_lock
+
+            with db_write_lock():
+                for payload, crop_path in prepared:
+                    if payload.get("kind") == "lane_change":
+                        repository = getattr(self.adapter, "lane_changes", None)
+                        if repository is not None:
+                            repository.insert_event({
+                                "camera_id": payload["camera_id"],
+                                "track_id": payload["track_id"],
+                                "class_name": payload["class_name"],
+                                "previous_lane_id": payload.get("previous_lane_id"),
+                                "current_lane_id": payload["current_lane_id"],
+                                "frame_id": payload["frame_id"],
+                                "created_at": payload["timestamp"],
+                            })
+                        continue
+                    db_breaker.call(self.adapter.events.insert_event, {
+                        "camera_id": payload["camera_id"],
+                        "job_id": payload["job_id"],
+                        "lane_id": payload["lane_id"],
+                        "track_id": payload["track_id"],
+                        "vehicle_type": payload["vehicle_type"],
+                        "direction": payload.get("direction"),
+                        "confidence": payload.get("confidence"),
+                        "frame_id": payload["frame_id"],
+                        "timestamp": payload["timestamp"],
+                        "crop_path": crop_path,
+                    })
+                    self._rollup_aggregates(
+                        payload["camera_id"],
+                        payload["lane_id"],
+                        payload["vehicle_type"],
+                        payload["timestamp"],
+                    )
+                session = getattr(self.adapter.events, "session", None)
+                if session is not None:
+                    commit_with_retry(session, already_locked=True)
+
+        for payload, crop_path in prepared:
+            if payload.get("kind") == "lane_change":
+                if self.publisher is not None:
+                    self.publisher.publish_event(
+                        "traffic:events",
+                        {
+                            "type": "lane_change",
+                            "camera_id": payload["camera_id"],
+                            "job_id": payload["job_id"],
+                            "track_id": payload["track_id"],
+                            "class_name": payload["class_name"],
+                            "previous_lane_id": payload.get("previous_lane_id"),
+                            "current_lane_id": payload["current_lane_id"],
+                            "frame_id": payload["frame_id"],
+                            "timestamp": payload["timestamp"].isoformat(),
+                        },
+                    )
+                continue
+            if self.publisher is not None:
+                ts = payload["timestamp"]
+                try:
+                    self.publisher.publish_event(
+                        "traffic:events",
+                        {
+                            "camera_id": payload["camera_id"],
+                            "job_id": payload["job_id"],
+                            "lane_id": payload["lane_id"],
+                            "track_id": payload["track_id"],
+                            "vehicle_type": payload["vehicle_type"],
+                            "direction": payload.get("direction"),
+                            "confidence": payload.get("confidence"),
+                            "frame_id": payload["frame_id"],
+                            "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                            "crop_path": crop_path,
+                        },
+                    )
+                except (ConnectionError, OSError, ValueError):
+                    logger.debug("StorageWorker: publish_event failed", exc_info=True)
 
     def _process(self, payload: dict[str, Any]) -> None:
         if payload.get("kind") == "lane_change":

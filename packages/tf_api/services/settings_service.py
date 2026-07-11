@@ -44,7 +44,7 @@ _DEFAULTS: dict[str, Any] = {
         "crop_format": "jpg",
         "crop_quality": 80,
         "crop_max_px": 320,
-        "aggregate_windows": ["1min", "5min", "1hour", "1day"],
+        "aggregate_windows": ["1hour", "1day"],
     },
     "notifications": {
         "backpressure_warn_threshold": 512,

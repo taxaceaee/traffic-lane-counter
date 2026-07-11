@@ -22,11 +22,12 @@ _SETTINGS_FILE = _SETTINGS_DIR / "settings.json"
 
 
 class DetectionSettings(BaseModel):
-    confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    # Keep Field defaults aligned with settings_service (single source of truth).
+    confidence: float = Field(default=0.22, ge=0.0, le=1.0)
     iou: float = Field(default=0.5, ge=0.0, le=1.0)
-    imgsz: int = Field(default=640, ge=128, le=1920)
+    imgsz: int = Field(default=960, ge=128, le=1920)
     half: bool = Field(default=True)
-    detect_every_n_frames: int = Field(default=2, ge=1, le=10)
+    detect_every_n_frames: int = Field(default=1, ge=1, le=10)
     tracker: str = Field(default="bytetrack")
     track_buffer: int = Field(default=30, ge=5, le=120)
     max_detections: int = Field(default=300, ge=1, le=1000)
@@ -39,7 +40,7 @@ class StorageSettings(BaseModel):
     crop_format: str = Field(default="jpg")
     crop_quality: int = Field(default=80, ge=10, le=100)
     crop_max_px: int = Field(default=320, ge=64, le=1024)
-    aggregate_windows: list[str] = Field(default=["1min", "5min", "1hour", "1day"])
+    aggregate_windows: list[str] = Field(default=["1hour", "1day"])
 
 
 class NotificationSettings(BaseModel):

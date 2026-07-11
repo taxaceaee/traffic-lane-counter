@@ -72,6 +72,12 @@ def get_engine() -> Any:
     return engine
 
 
+def reset_engine_cache() -> None:
+    """Clear engine + sessionmaker caches (tests / DATABASE_URL switch)."""
+    get_engine.cache_clear()
+    _session_factory.cache_clear()
+
+
 def is_sqlite() -> bool:
     url = os.getenv("DATABASE_URL", "sqlite:///./data/trafficflow.db")
     return url.startswith("sqlite")
@@ -119,6 +125,12 @@ def commit_with_retry(
         raise last_exc
 
 
+@lru_cache(maxsize=1)
+def _session_factory() -> sessionmaker:
+    """Cache sessionmaker — avoid allocating a new factory per SessionLocal()."""
+    return sessionmaker(bind=get_engine(), autocommit=False, autoflush=False)
+
+
 def SessionLocal() -> Session:
     """Create a new session bound to the current (cached) engine."""
-    return sessionmaker(bind=get_engine(), autocommit=False, autoflush=False)()
+    return _session_factory()()

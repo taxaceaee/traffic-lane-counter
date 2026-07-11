@@ -46,7 +46,11 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[st
 
     from tf_db import session as db_session_module
 
-    db_session_module.get_engine.cache_clear()
+    # Clear engine + sessionmaker so DATABASE_URL switch takes effect.
+    if hasattr(db_session_module, "reset_engine_cache"):
+        db_session_module.reset_engine_cache()
+    else:
+        db_session_module.get_engine.cache_clear()
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
 
@@ -120,7 +124,10 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[st
         "settings_path": settings_path,
     }
 
-    db_session_module.get_engine.cache_clear()
+    if hasattr(db_session_module, "reset_engine_cache"):
+        db_session_module.reset_engine_cache()
+    else:
+        db_session_module.get_engine.cache_clear()
 
 
 @pytest.fixture()

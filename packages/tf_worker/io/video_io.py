@@ -145,13 +145,14 @@ class CameraStreamReader:
             # Reset backoff on successful read
             reconnect_delay = _RTSP_BASE_DELAY
 
-            # Discard stale frame, keep only the newest
+            # Discard stale frame, keep only the newest (must catch Full —
+            # put_nowait raises queue.Full when maxsize=1 is occupied).
             try:
                 self._queue.put_nowait(frame)
-            except (ValueError, Empty, OSError):
+            except (ValueError, Empty, Full, OSError, AttributeError):
                 with contextlib.suppress(Empty):
                     self._queue.get_nowait()
-                with contextlib.suppress(ValueError, Empty, OSError):
+                with contextlib.suppress(ValueError, Empty, Full, OSError, AttributeError):
                     self._queue.put_nowait(frame)
 
     def read(self) -> tuple[bool, Any]:
