@@ -91,8 +91,15 @@ if [ "$APP_ENV" = "development" ] \
     && [ -z "${YOUTUBE_COOKIES_FILE:-}" ] \
     && [ -z "${YOUTUBE_COOKIES_FROM_BROWSER:-}" ] \
     && [ -f "$HOME/.config/google-chrome/Default/Cookies" ]; then
-  export YOUTUBE_COOKIES_FROM_BROWSER="chrome:Default"
-  echo "YouTube cookies: using local Chrome Default profile (not stored in repo)."
+  # Browser cookies help with YouTube anti-bot. If secretstorage/keyring fails,
+  # yt_utils falls back to cookie-less extract automatically.
+  if .venv/bin/python -c "import secretstorage" >/dev/null 2>&1; then
+    export YOUTUBE_COOKIES_FROM_BROWSER="chrome:Default"
+    echo "YouTube cookies: using local Chrome Default profile (not stored in repo)."
+  else
+    echo "WARNING: secretstorage missing; YouTube browser cookies disabled."
+    echo "  Fix: .venv/bin/pip install secretstorage"
+  fi
 fi
 
 port_is_open() {

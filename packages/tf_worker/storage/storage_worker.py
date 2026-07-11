@@ -298,19 +298,9 @@ class StorageWorker:
             try:
                 self._process(item)
                 self.total_processed += 1
-                commit_counter += 1
-                # Batch commit every 50 events — prevents commit-per-event
-                # bottleneck (~200 tps → ~200 write-xacts/sec would saturate
-                # SQLite WAL at ~100 tps).
-                # Commit every few events so Vehicle Counting (3s poll) stays fresh
-                # under multi-camera SQLite writers (serialized via db_write_lock).
-                if commit_counter >= 3 and self.adapter is not None:
-                    try:
-                        self.adapter.events.commit()
-                        self.adapter.aggregates.commit()
-                    except Exception:
-                        logger.warning("StorageWorker: batch commit failed", exc_info=True)
-                    commit_counter = 0
+                # Commits happen inside _process under the process-wide SQLite
+                # write lock (multi-camera always-on would otherwise thrash WAL).
+                commit_counter = 0
             except Exception as exc:
                 self.total_errors += 1
                 self._append_dead_letter(item)
@@ -368,15 +358,23 @@ class StorageWorker:
             if self.adapter is not None:
                 repository = getattr(self.adapter, "lane_changes", None)
                 if repository is not None:
-                    repository.insert_event({
-                        "camera_id": payload["camera_id"],
-                        "track_id": payload["track_id"],
-                        "class_name": payload["class_name"],
-                        "previous_lane_id": payload.get("previous_lane_id"),
-                        "current_lane_id": payload["current_lane_id"],
-                        "frame_id": payload["frame_id"],
-                        "created_at": payload["timestamp"],
-                    })
+                    from tf_db.session import db_write_lock
+
+                    with db_write_lock():
+                        repository.insert_event({
+                            "camera_id": payload["camera_id"],
+                            "track_id": payload["track_id"],
+                            "class_name": payload["class_name"],
+                            "previous_lane_id": payload.get("previous_lane_id"),
+                            "current_lane_id": payload["current_lane_id"],
+                            "frame_id": payload["frame_id"],
+                            "created_at": payload["timestamp"],
+                        })
+                        from tf_db.session import commit_with_retry
+
+                        commit_with_retry(
+                            self.adapter.events.session, already_locked=True
+                        )
             if self.publisher is not None:
                 self.publisher.publish_event(
                     "traffic:events",
@@ -418,19 +416,29 @@ class StorageWorker:
                 )
 
         if self.adapter is not None:
+            from tf_db.session import db_write_lock
+
             try:
-                db_breaker.call(self.adapter.events.insert_event, {
-                    "camera_id": payload["camera_id"],
-                    "job_id": payload["job_id"],
-                    "lane_id": payload["lane_id"],
-                    "track_id": payload["track_id"],
-                    "vehicle_type": payload["vehicle_type"],
-                    "direction": payload.get("direction"),
-                    "confidence": payload.get("confidence"),
-                    "frame_id": payload["frame_id"],
-                    "timestamp": payload["timestamp"],
-                    "crop_path": crop_path,
-                })
+                # Hold the process write lock for execute+commit so three
+                # always-on cameras do not interleave SQLite transactions.
+                with db_write_lock():
+                    db_breaker.call(self.adapter.events.insert_event, {
+                        "camera_id": payload["camera_id"],
+                        "job_id": payload["job_id"],
+                        "lane_id": payload["lane_id"],
+                        "track_id": payload["track_id"],
+                        "vehicle_type": payload["vehicle_type"],
+                        "direction": payload.get("direction"),
+                        "confidence": payload.get("confidence"),
+                        "frame_id": payload["frame_id"],
+                        "timestamp": payload["timestamp"],
+                        "crop_path": crop_path,
+                    })
+                    self._rollup_aggregates(camera_id, lane_id, payload["vehicle_type"], ts)
+                    # Commit under the same lock; skip nested lock acquisition.
+                    from tf_db.session import commit_with_retry
+
+                    commit_with_retry(self.adapter.events.session, already_locked=True)
             except (CircuitBreakerOpen, OSError, KeyError, ValueError) as exc:
                 logger.warning(
                     "StorageWorker: event insert failed (%s) — dead-letter frame_id=%d",
@@ -441,7 +449,9 @@ class StorageWorker:
                     if len(self._dead_letter) > _DEAD_LETTER_MAX:
                         self._dead_letter.pop(0)
                 return
-            self._rollup_aggregates(camera_id, lane_id, payload["vehicle_type"], ts)
+            except Exception:
+                # OperationalError (locked) etc. — let outer handler dead-letter
+                raise
 
         if self.publisher is not None:
             try:

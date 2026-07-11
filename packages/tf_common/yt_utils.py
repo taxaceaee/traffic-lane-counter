@@ -18,16 +18,85 @@ _LIVE_STREAM_CACHE_TTL_S = 300.0
 _stream_info_cache: dict[str, tuple[dict[str, Any], float]] = {}
 _stream_info_cache_lock = threading.Lock()
 
+# Cookie modes that fail hard once are skipped for the process lifetime so
+# live reconnection loops do not re-hit a broken Chrome keyring every 5s.
+_disabled_browser_cookie_keys: set[str] = set()
+_browser_cookie_lock = threading.Lock()
+
+
+def _cookie_failure_markers(exc: BaseException) -> bool:
+    text = str(exc).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "secretstorage",
+            "could not copy chrome cookie database",
+            "could not find chrome cookies",
+            "failed to decrypt",
+            "cookiesfrombrowser",
+            "cookie database",
+            "keyring",
+            "dbus",
+        )
+    )
+
+
+def _browser_cookies_available(browser_spec: str) -> bool:
+    """Return False when Chrome cookies cannot be used on this host."""
+    key = browser_spec.strip()
+    with _browser_cookie_lock:
+        if key in _disabled_browser_cookie_keys:
+            return False
+
+    # secretstorage is required for Chrome cookie decryption on Linux.
+    try:
+        import secretstorage  # noqa: F401
+    except ImportError:
+        logger.warning(
+            "secretstorage not installed — skipping browser cookies "
+            "(pip install secretstorage). Public YouTube lives still work without cookies."
+        )
+        with _browser_cookie_lock:
+            _disabled_browser_cookie_keys.add(key)
+        return False
+
+    return True
+
+
+def disable_browser_cookies(reason: str = "") -> None:
+    """Disable env browser-cookie mode after a hard failure."""
+    browser = os.environ.get("YOUTUBE_COOKIES_FROM_BROWSER", "").strip()
+    if not browser:
+        return
+    with _browser_cookie_lock:
+        if browser not in _disabled_browser_cookie_keys:
+            _disabled_browser_cookie_keys.add(browser)
+            logger.warning(
+                "Disabling YOUTUBE_COOKIES_FROM_BROWSER=%s for this process%s",
+                browser,
+                f": {reason}" if reason else "",
+            )
+
 
 def build_ydl_opts(
     overrides: dict[str, Any] | None = None,
     quiet: bool = True,
+    *,
+    use_browser_cookies: bool | None = None,
 ) -> dict[str, Any]:
-    """Build a yt-dlp option set with optional cookie support."""
+    """Build a yt-dlp option set with optional cookie support.
+
+    ``use_browser_cookies``:
+      None  — auto (env + capability check)
+      False — never attach cookiesfrombrowser (fallback path)
+      True  — attach if env set (still gated by capability check)
+    """
     opts: dict[str, Any] = {
         "quiet": quiet,
         "no_warnings": quiet,
         "extract_flat": False,
+        # Prefer progressive/HLS that OpenCV/FFmpeg can open reliably.
+        "nocheckcertificate": False,
     }
 
     cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE")
@@ -43,23 +112,27 @@ def build_ydl_opts(
             )
 
     cookies_browser = os.environ.get("YOUTUBE_COOKIES_FROM_BROWSER")
-    if cookies_browser and cookies_browser.strip():
+    want_browser = use_browser_cookies is not False
+    if want_browser and cookies_browser and cookies_browser.strip():
         browser = cookies_browser.strip()
-        # yt-dlp's Python API expects (browser, profile, keyring, container),
-        # while the environment-friendly form is "chrome:Default".
-        browser_name, separator, profile = browser.partition(":")
-        opts["cookiesfrombrowser"] = (
-            browser_name,
-            profile if separator and profile else None,
-            None,
-            None,
-        )
-        logger.info("YouTube cookies from browser: %s", browser)
+        if _browser_cookies_available(browser):
+            browser_name, separator, profile = browser.partition(":")
+            # yt-dlp API: (browser, profile, keyring, container)
+            opts["cookiesfrombrowser"] = (
+                browser_name,
+                profile if separator and profile else None,
+                None,
+                None,
+            )
+            logger.info("YouTube cookies from browser: %s", browser)
+        else:
+            logger.info(
+                "Browser cookies requested (%s) but unavailable — extracting without cookies",
+                browser,
+            )
 
-    # YouTube now requires a JS challenge solver for full extraction. Node is
-    # already part of the local development toolchain, so enable it when
-    # present. The remote EJS component is allowed by default because yt-dlp
-    # ships the solver core but not the frequently updated challenge library.
+    # YouTube JS challenge solver. Node is the local default; yt-dlp 2025+
+    # may only enable deno by default, so we always pin node when present.
     node_path = shutil.which("node")
     if node_path:
         opts["js_runtimes"] = {"node": {"path": node_path}}
@@ -68,7 +141,7 @@ def build_ydl_opts(
         item.strip() for item in remote_components.split(",") if item.strip()
     ]
     pot_port = os.environ.get("YTDLP_BGUTIL_PORT", "4416").strip()
-    if pot_port != "4416":
+    if pot_port:
         opts.setdefault("extractor_args", {}).setdefault(
             "youtubepot-bgutilhttp", {}
         )["base_url"] = [f"http://127.0.0.1:{pot_port}"]
@@ -91,6 +164,9 @@ def resolve_stream_info(
     not discard a still-valid HLS URL and immediately trigger another YouTube
     page extraction, which is especially prone to transient anti-bot failures.
     Periodic refreshes can bypass this cache by leaving it disabled.
+
+    On cookie/keyring failures the helper automatically retries **without**
+    browser cookies so public live streams keep working.
     """
     import yt_dlp
 
@@ -103,38 +179,51 @@ def resolve_stream_info(
                 return dict(cached[0])
 
     last_exc: Exception | None = None
-    for attempt in range(1, retries + 1):
-        try:
-            with yt_dlp.YoutubeDL(build_ydl_opts({"format": fmt})) as ydl:
-                info = ydl.extract_info(url, download=False)
+    # First pass may use browser cookies; second pass forces cookie-less extract.
+    cookie_modes: list[bool | None] = [None, False]
 
-            resolved = {
-                "url": _pick_stream_url(info),
-                "width": info.get("width", 0) or 0,
-                "height": info.get("height", 0) or 0,
-                "fps": float(info.get("fps", 25.0) or 25.0),
-                "duration": info.get("duration"),
-            }
-            if not resolved["url"]:
-                raise ValueError("yt-dlp returned no stream URL")
-            with _stream_info_cache_lock:
-                _stream_info_cache[cache_key] = (dict(resolved), time.monotonic())
-            return resolved
-        except Exception as exc:
-            last_exc = exc
-            if attempt < retries:
-                logger.warning(
-                    "yt-dlp resolve attempt %s/%s failed: %s - retrying in %.1fs",
-                    attempt,
-                    retries,
-                    exc,
-                    RETRY_DELAY_S,
-                )
-                time.sleep(RETRY_DELAY_S)
+    for use_cookies in cookie_modes:
+        for attempt in range(1, retries + 1):
+            try:
+                opts = build_ydl_opts({"format": fmt}, use_browser_cookies=use_cookies)
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
 
-    # A short-lived extractor failure must not take down a stream that was
-    # already resolved successfully. The reader will still refresh normally
-    # when its periodic refresh path explicitly bypasses this cache.
+                resolved = {
+                    "url": _pick_stream_url(info),
+                    "width": info.get("width", 0) or 0,
+                    "height": info.get("height", 0) or 0,
+                    "fps": float(info.get("fps", 25.0) or 25.0),
+                    "duration": info.get("duration"),
+                }
+                if not resolved["url"]:
+                    raise ValueError("yt-dlp returned no stream URL")
+                with _stream_info_cache_lock:
+                    _stream_info_cache[cache_key] = (dict(resolved), time.monotonic())
+                if use_cookies is False:
+                    logger.info("Resolved YouTube stream without browser cookies: %s", url)
+                return resolved
+            except Exception as exc:
+                last_exc = exc
+                if _cookie_failure_markers(exc):
+                    disable_browser_cookies(str(exc))
+                    # Jump to cookie-less mode immediately.
+                    break
+                if attempt < retries:
+                    logger.warning(
+                        "yt-dlp resolve attempt %s/%s failed: %s - retrying in %.1fs",
+                        attempt,
+                        retries,
+                        exc,
+                        RETRY_DELAY_S,
+                    )
+                    time.sleep(RETRY_DELAY_S)
+        else:
+            # exhausted attempts for this cookie mode without cookie-marker break
+            continue
+        # cookie-marker break → try next mode
+        continue
+
     if allow_stale_cache:
         with _stream_info_cache_lock:
             cached = _stream_info_cache.get(cache_key)
@@ -188,6 +277,11 @@ def _pick_stream_url(info: dict[str, Any]) -> str:
 
     formats = info.get("formats")
     if formats:
+        # Prefer live HLS manifests for OpenCV.
+        for fmt in formats:
+            protocol = str(fmt.get("protocol") or "")
+            if "m3u8" in protocol and fmt.get("url"):
+                return fmt["url"]
         for fmt in formats:
             if fmt.get("vcodec", "none") != "none" and fmt.get("url"):
                 return fmt["url"]

@@ -87,13 +87,26 @@ def db_write_lock() -> Iterator[None]:
         yield
 
 
-def commit_with_retry(session: Session, *, attempts: int = 5, base_delay: float = 0.05) -> None:
-    """Commit with retry on transient SQLite lock errors."""
+def commit_with_retry(
+    session: Session,
+    *,
+    attempts: int = 8,
+    base_delay: float = 0.05,
+    already_locked: bool = False,
+) -> None:
+    """Commit with retry on transient SQLite lock errors.
+
+    ``already_locked=True`` when the caller already holds ``db_write_lock``
+    (avoids re-entrant lock + sleep while holding it for long).
+    """
     last_exc: Exception | None = None
     for i in range(max(1, attempts)):
         try:
-            with db_write_lock():
+            if already_locked or not is_sqlite():
                 session.commit()
+            else:
+                with db_write_lock():
+                    session.commit()
             return
         except Exception as exc:  # noqa: BLE001 — retry only locked/busy
             last_exc = exc

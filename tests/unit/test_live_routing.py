@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_nginx_routes_live_api_before_frontend_fallback():
-    config = Path("deploy/proxy/nginx.conf").read_text(encoding="utf-8")
+    config = Path("deploy/nginx.conf").read_text(encoding="utf-8")
     live_pos = config.index("location /live/")
     frontend_pos = config.index("location / {")
     assert live_pos < frontend_pos
