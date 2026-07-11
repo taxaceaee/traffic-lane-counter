@@ -467,9 +467,10 @@ function _showSnapshot(container, cameraId) {
 }
 
 // ── MJPEG stream ──────────────────────────────────────────────────────
-// Pipeline auto-starts on first request to /live/{id}/stream.mjpg.
+// Always-on pipelines already run at API boot (AUTO_START_LIVE_STREAMS).
+// Opening Live only attaches MJPEG; if missing, stream.mjpg starts one.
 // We insert an <img> tag pointing to the MJPEG URL — browser sends GET,
-// server starts pipeline if not already running, returns multipart stream.
+// server reuses/starts pipeline, returns multipart stream.
 // If pipeline start fails or source is invalid, the server returns an
 // error response (404/500), which triggers img onerror → fallback.
 

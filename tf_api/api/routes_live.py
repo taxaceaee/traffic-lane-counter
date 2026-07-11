@@ -1275,6 +1275,45 @@ async def reload_live_pipeline(
     return {"status": "reloaded", "camera_id": camera_id, "model_id": model_id}
 
 
+@router.get("/live/status")
+async def live_fleet_status(_user: dict = Depends(get_current_user)):
+    """Fleet overview of always-on / live detection pipelines.
+
+    Used by Dashboard and ops to confirm cameras are feeding realtime data
+    without opening Live Monitoring.
+    """
+    from tf_common.monitoring.live_metrics import get_camera_metrics
+
+    configured = list_configured_camera_ids()
+    cameras: list[dict[str, Any]] = []
+    with _lock:
+        for camera_id in configured:
+            stream = _streams.get(camera_id)
+            meta = stream[2] if stream is not None else {}
+            metrics = get_camera_metrics(camera_id)
+            cameras.append({
+                "camera_id": camera_id,
+                "running": stream is not None,
+                "always_on": bool(meta.get("always_on")),
+                "viewers": int(meta.get("connections") or 0),
+                "status": metrics.get("status"),
+                "process_fps": metrics.get("process_fps") or metrics.get("fps") or 0,
+                "output_fps": metrics.get("output_fps") or 0,
+                "vehicle_types": dict(meta.get("vehicle_types") or {}),
+                "occupancy": dict(meta.get("occupancy") or {}),
+                "error": metrics.get("error"),
+            })
+    running = sum(1 for c in cameras if c["running"])
+    return {
+        "auto_start_enabled": _env_auto_start_live(),
+        "supervisor_interval_sec": _SUPERVISOR_INTERVAL_SEC,
+        "configured": len(configured),
+        "running": running,
+        "always_on": sum(1 for c in cameras if c["always_on"]),
+        "cameras": cameras,
+    }
+
+
 @router.get("/live/{camera_id}/metrics")
 async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_user)):
     """Return real-time input/process/output FPS, latency, and GPU metrics."""
@@ -1289,6 +1328,9 @@ async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_
             meta = stream[2]
             result["vehicle_types"] = dict(meta.get("vehicle_types") or {})
             result["occupancy"] = dict(meta.get("occupancy") or {})
+            result["always_on"] = bool(meta.get("always_on"))
+            result["viewers"] = int(meta.get("connections") or 0)
+            result["pipeline_running"] = True
             result["preview"] = {
                 "width": meta.get("preview_width"),
                 "height": meta.get("preview_height"),
@@ -1301,6 +1343,10 @@ async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_
         else:
             result.setdefault("vehicle_types", {})
             result.setdefault("occupancy", {})
+            result["always_on"] = False
+            result["viewers"] = 0
+            result["pipeline_running"] = False
+    result["auto_start_enabled"] = _env_auto_start_live()
     return result
 
 

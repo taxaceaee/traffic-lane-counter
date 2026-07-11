@@ -235,7 +235,7 @@ async function switchTab(tabId) {
 
 function updatePageHeader(tabId) {
     const headers = {
-        dashboard: ["Dashboard", "Fleet overview — 24h KPIs, peaks, top cameras, and system readiness."],
+        dashboard: ["Dashboard", "Fleet ops — live cameras, lane occupancy, class mix, and infrastructure."],
         live:      ["Live Monitoring", "Real-time annotated video, lane occupancy, and AI inference metrics."],
         counting:  ["Vehicle Counting", "Filter counts by camera, time, and type. Review recent line crossings."],
         alerts:    ["Alert System", "Active incidents, remediation steps, and alert history."],

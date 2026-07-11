@@ -78,18 +78,81 @@ def _merge_type_counts(*dicts: dict[str, int]) -> dict[str, int]:
     return out
 
 
+def _camera_row(
+    cid: str,
+    cam_total: int,
+    live_info: dict[str, Any],
+    display_total: int,
+    is_live: bool,
+    total_live: int,
+) -> dict[str, Any]:
+    """Normalize one camera row for the dashboard fleet table."""
+    occ = live_info.get("occupancy") or {}
+    return {
+        "camera_id": cid,
+        "total": display_total,
+        "total_db": cam_total,
+        "total_live": total_live,
+        "live": is_live,
+        "always_on": bool(live_info.get("always_on")),
+        "pipeline_running": bool(live_info.get("pipeline_running")),
+        "process_fps": float(live_info.get("process_fps") or 0.0),
+        "source_fps": float(live_info.get("source_fps") or 0.0),
+        "output_fps": float(live_info.get("output_fps") or 0.0),
+        "avg_latency_ms": float(live_info.get("avg_latency_ms") or 0.0),
+        "viewers": int(live_info.get("viewers") or live_info.get("connections") or 0),
+        "status": live_info.get("status") or ("active" if is_live else "stopped"),
+        "error": live_info.get("error"),
+        "error_code": live_info.get("error_code"),
+        "occupancy": occ,
+        "occupancy_total": int(
+            live_info.get("occupancy_total")
+            if live_info.get("occupancy_total") is not None
+            else _occupancy_total(occ)
+        ),
+        "vehicle_types": live_info.get("vehicle_types") or {},
+    }
+
+
+def _occupancy_total(occ: dict[str, Any] | None) -> int:
+    if not occ:
+        return 0
+    total = 0
+    for v in occ.values():
+        try:
+            n = int(v)
+            if n > 0:
+                total += n
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def _collect_live_snapshot() -> dict[str, Any]:
     """Read live pipeline memory for all active streams."""
     from tf_common.monitoring.live_metrics import get_camera_metrics
 
     try:
-        from tf_api.api.routes_live import _lock, _streams
+        from tf_api.api.routes_live import _env_auto_start_live, _lock, _streams
     except Exception:
-        return {"cameras": {}, "live_cameras": 0, "types": {}, "total": 0}
+        return {
+            "cameras": {},
+            "live_cameras": 0,
+            "always_on_cameras": 0,
+            "types": {},
+            "total": 0,
+            "occupancy_now": 0,
+            "avg_process_fps": 0.0,
+            "auto_start_enabled": True,
+        }
 
     cameras: dict[str, dict[str, Any]] = {}
     types_live: dict[str, int] = {}
     live_cameras = 0
+    always_on_cameras = 0
+    occupancy_now = 0
+    fps_sum = 0.0
+    fps_n = 0
 
     with _lock:
         items = list(_streams.items())
@@ -99,28 +162,56 @@ def _collect_live_snapshot() -> dict[str, Any]:
         vtypes = dict(meta.get("vehicle_types") or {})
         occ = dict(meta.get("occupancy") or {})
         connections = int(meta.get("connections", 0) or 0)
+        always_on = bool(meta.get("always_on"))
         stream_active = bool(metrics.get("stream_active")) or connections > 0
         if stream_active:
             live_cameras += 1
+        if always_on:
+            always_on_cameras += 1
         live_total = _sum_vehicle_types(vtypes)
         types_live = _merge_type_counts(types_live, vtypes)
+        occ_total = _occupancy_total(occ)
+        occupancy_now += occ_total
+        proc_fps = float(metrics.get("process_fps") or 0.0)
+        if proc_fps > 0:
+            fps_sum += proc_fps
+            fps_n += 1
         cameras[cid] = {
             "camera_id": cid,
             "live": stream_active,
+            "always_on": always_on,
+            "pipeline_running": True,
             "connections": connections,
+            "viewers": connections,
             "total_live": live_total,
             "vehicle_types": vtypes,
             "occupancy": occ,
-            "process_fps": float(metrics.get("process_fps") or 0.0),
+            "occupancy_total": occ_total,
+            "process_fps": proc_fps,
+            "source_fps": float(metrics.get("source_fps") or 0.0),
             "output_fps": float(metrics.get("output_fps") or 0.0),
+            "avg_latency_ms": float(metrics.get("avg_latency_ms") or 0.0),
             "status": metrics.get("status"),
+            "error": metrics.get("error"),
+            "error_code": metrics.get("error_code"),
+            "gpu_util_pct": metrics.get("gpu_util_pct"),
+            "gpu_available": bool(metrics.get("gpu_available")),
         }
+
+    try:
+        auto_start = bool(_env_auto_start_live())
+    except Exception:
+        auto_start = True
 
     return {
         "cameras": cameras,
         "live_cameras": live_cameras,
+        "always_on_cameras": always_on_cameras,
         "types": types_live,
         "total": _sum_vehicle_types(types_live),
+        "occupancy_now": occupancy_now,
+        "avg_process_fps": round(fps_sum / fps_n, 1) if fps_n else 0.0,
+        "auto_start_enabled": auto_start,
     }
 
 
@@ -211,37 +302,23 @@ async def dashboard_summary(_user: dict = Depends(get_current_user)):
             is_live = bool(live_info.get("live"))
             display_total = total_live if is_live and total_live > 0 else cam_total
 
-            per_camera.append({
-                "camera_id": cid,
-                "total": display_total,
-                "total_db": cam_total,
-                "total_live": total_live,
-                "live": is_live,
-                "process_fps": live_info.get("process_fps", 0.0),
-                "output_fps": live_info.get("output_fps", 0.0),
-                "occupancy": live_info.get("occupancy") or {},
-                "vehicle_types": live_info.get("vehicle_types") or {},
-            })
+            per_camera.append(_camera_row(cid, cam_total, live_info, display_total, is_live, total_live))
 
         # Include any live-only camera ids not in YAML (shouldn't happen, but safe).
         for cid, live_info in live_by_cam.items():
             if cid in camera_ids:
                 continue
             total_live = int(live_info.get("total_live") or 0)
-            per_camera.append({
-                "camera_id": cid,
-                "total": total_live,
-                "total_db": 0,
-                "total_live": total_live,
-                "live": bool(live_info.get("live")),
-                "process_fps": live_info.get("process_fps", 0.0),
-                "output_fps": live_info.get("output_fps", 0.0),
-                "occupancy": live_info.get("occupancy") or {},
-                "vehicle_types": live_info.get("vehicle_types") or {},
-            })
+            per_camera.append(
+                _camera_row(cid, 0, live_info, total_live, bool(live_info.get("live")), total_live)
+            )
 
         per_camera.sort(
-            key=lambda x: (int(x.get("live") or 0), int(x.get("total") or 0)),
+            key=lambda x: (
+                int(x.get("live") or 0),
+                int(x.get("occupancy_total") or 0),
+                int(x.get("total") or 0),
+            ),
             reverse=True,
         )
 
@@ -266,6 +343,17 @@ async def dashboard_summary(_user: dict = Depends(get_current_user)):
         except Exception:
             logger.debug("Could not read active alert count", exc_info=True)
 
+        # Dominant vehicle class for a one-glance fleet read.
+        dominant_class = None
+        dominant_count = 0
+        for k, v in (type_distribution or {}).items():
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if n > dominant_count:
+                dominant_class, dominant_count = k, n
+
         return {
             "total_vehicles": total_vehicles,
             "total_vehicles_db": total_vehicles_db,
@@ -275,9 +363,15 @@ async def dashboard_summary(_user: dict = Depends(get_current_user)):
             "type_distribution": type_distribution,
             "type_distribution_db": type_dist_db,
             "type_distribution_live": type_live,
+            "dominant_class": dominant_class,
+            "dominant_class_count": dominant_count,
             "active_alerts": active_alerts,
             "total_cameras": len(camera_ids),
             "live_cameras": live_cameras,
+            "always_on_cameras": int(live.get("always_on_cameras") or 0),
+            "auto_start_enabled": bool(live.get("auto_start_enabled", True)),
+            "occupancy_now": int(live.get("occupancy_now") or 0),
+            "avg_process_fps": float(live.get("avg_process_fps") or 0.0),
             "total_lanes": _count_configured_lanes(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }

@@ -23,6 +23,12 @@
    - `GET /api/settings/defaults`
    - `POST /api/settings/reset`
 4. Camera YouTube live chỉ dùng đúng 3 source đã khóa trong `tf_api/api/routes_cameras.py`.
+5. Live detection always-on (mặc định):
+   - `AUTO_START_LIVE_STREAMS=true` (xem `.env.example`) — API boot auto-start
+     mọi camera YAML, supervisor restart mỗi 30s.
+   - Không cần mở Live Monitoring để Dashboard/Events có data.
+   - `GET /live/status` — fleet overview (running / always_on / fps).
+   - Tắt: `AUTO_START_LIVE_STREAMS=false` (chỉ start khi có MJPEG viewer).
 
 ## Local entrypoints
 
