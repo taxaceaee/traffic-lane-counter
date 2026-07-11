@@ -364,12 +364,6 @@ function _applyLiveZoomTransform() {
     if (!stage) return;
     stage.style.transform = `translate(${_livePanX}px, ${_livePanY}px) scale(${_liveZoom})`;
     stage.style.cursor = _liveZoom > 1 ? 'grab' : 'default';
-    // Avoid browser bilinear blur on zoom — keep box/text edges hard.
-    const crisp = _liveZoom > 1 ? 'crisp-edges' : 'auto';
-    stage.style.imageRendering = crisp;
-    stage.querySelectorAll('img, canvas').forEach((el) => {
-        el.style.imageRendering = crisp;
-    });
 }
 
 function _updateLiveZoomLabel() {
