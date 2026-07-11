@@ -10,18 +10,20 @@ camera:
   allow_scaling: true
 model:
   model_id: yolo11n_coco
-  conf_threshold: 0.35
-  iou_threshold: 0.5
-  imgsz: 640
+  conf_threshold: 0.25
+  iou_threshold: 0.45
   allowed_classes:
   - car
   - motorcycle
   - truck
   - bus
+  detect_every_n_frames: 1
+  max_detections: 500
+  roi_padding: 80
 tracking:
   tracker: bytetrack.yaml
-  active_track_timeout_frames: 10
-  min_track_age_frames: 3
+  active_track_timeout_frames: 15
+  min_track_age_frames: 2
 lanes:
   config_path: ../lanes/YT_LIVE_TEST_lanes.yaml
 counting:

@@ -30,7 +30,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.responses import StreamingResponse
 
 from tf_api.api.routes_auth import decode_access_token, get_current_user, require_operator
-from tf_api.services.settings_service import get_detection_defaults, get_max_streams
+from tf_api.services.settings_service import (
+    get_detection_defaults,
+    get_max_streams,
+    get_preview_defaults,
+)
 from tf_common.safe_path import validate_identifier
 from tf_common.live_errors import diagnose_stream_error
 from tf_common.viz_colors import build_lane_color_map, color_for_lane, color_for_track
@@ -205,18 +209,25 @@ def _resolve_model_weights(model_section: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "weights": weights,
-        "imgsz": model_section.get("imgsz", defaults.get("imgsz", 640)),
-        "conf": model_section.get("conf_threshold", defaults.get("confidence", 0.35)),
-        "iou": model_section.get("iou_threshold", defaults.get("iou", 0.5)),
+        # imgsz may be raised later to native ROI / full-frame size.
+        "imgsz": model_section.get("imgsz", defaults.get("imgsz", 1280)),
+        "conf": model_section.get("conf_threshold", defaults.get("confidence", 0.25)),
+        "iou": model_section.get("iou_threshold", defaults.get("iou", 0.45)),
         "class_mode": class_mode,
         "allowed_classes": model_section.get("allowed_classes", []),
         "half": model_section.get("half", defaults.get("half", True)),
+        # Detect every frame by default — max object recall for live traffic.
         "detect_every_n_frames": model_section.get(
             "detect_every_n_frames",
-            defaults.get("detect_every_n_frames", 2),
+            defaults.get("detect_every_n_frames", 1),
         ),
         "roi_crop": model_section.get("roi_crop", defaults.get("roi_crop", True)),
-        "max_detections": model_section.get("max_detections", defaults.get("max_detections", 300)),
+        "max_detections": model_section.get(
+            "max_detections", defaults.get("max_detections", 500)
+        ),
+        "roi_padding": model_section.get(
+            "roi_padding", defaults.get("roi_padding", 80)
+        ),
     }
 
 
@@ -256,9 +267,15 @@ def _cfg_to_pipeline_dict(cfg: dict[str, Any], camera_cfg_path: Path | None = No
             "min_cross_distance_px": counting.get("min_cross_distance_px", 2.0),
             "count_unstable_lane": True,
         },
-        "roi_padding": detector.get("roi_padding", 50),
+        "roi_padding": detector.get("roi_padding", 80),
         "lanes": lanes,
     }
+
+
+def _native_imgsz(width: int, height: int, stride: int = 32) -> int:
+    """YOLO imgsz = longest edge rounded up to stride (no intentional downscale)."""
+    longest = max(int(width), int(height), stride)
+    return ((longest + stride - 1) // stride) * stride
 
 
 def _build_live_runtime(
@@ -281,7 +298,7 @@ def _build_live_runtime(
     original_frame_h = pipeline_cfg["frame_size"]["height"]
     if roi_crop_enabled and (lanes or zone_polygons):
         try:
-            roi_padding = int(pipeline_cfg.get("roi_padding", 50))
+            roi_padding = int(pipeline_cfg.get("roi_padding", 80))
             roi = CropROI(
                 lanes,
                 pipeline_cfg["frame_size"],
@@ -290,16 +307,26 @@ def _build_live_runtime(
             )
             pipeline_cfg = roi.transform_config(pipeline_cfg)
             pipeline_cfg.setdefault("detector", {})
+            # Native crop resolution for max detection quality (no downscale).
             pipeline_cfg["detector"]["imgsz"] = roi.suggested_imgsz()
             logger.info(
-                "ROI crop: %s (area ratio: %.2f%%), imgsz=%d",
+                "ROI crop: %s (area ratio: %.2f%%), imgsz=%d conf=%.2f max_det=%s every_n=%s",
                 roi,
                 roi.area_ratio * 100,
                 pipeline_cfg["detector"]["imgsz"],
+                float(pipeline_cfg["detector"].get("conf", 0.25)),
+                pipeline_cfg["detector"].get("max_detections", 500),
+                pipeline_cfg["detector"].get("detect_every_n_frames", 1),
             )
         except Exception:
             logger.warning("Failed to init CropROI — full frame", exc_info=True)
             roi = None
+
+    if roi is None:
+        pipeline_cfg.setdefault("detector", {})
+        pipeline_cfg["detector"]["imgsz"] = _native_imgsz(
+            original_frame_w, original_frame_h
+        )
 
     return pipeline_cfg, lanes, roi, original_frame_w, original_frame_h
 
@@ -406,40 +433,81 @@ def _start_pipeline(
         publisher=publisher,
     )
 
-    annotated_queue: Queue = Queue(maxsize=1)
-    stream_meta: dict[str, Any] = {"source_fps": float(cfg.get("fps", 25.0) or 25.0)}
+    annotated_queue: Queue = Queue(maxsize=2)
+    preview_defaults = get_preview_defaults()
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 85))
+    jpeg_quality = max(60, min(95, jpeg_quality))
+    preview_target_fps = float(preview_defaults.get("target_fps", 25) or 25)
+    preview_target_fps = max(5.0, min(60.0, preview_target_fps))
+    stream_meta: dict[str, Any] = {
+        "source_fps": float(cfg.get("fps", 25.0) or 25.0),
+        "preview_fps_target": preview_target_fps,
+        "preview_jpeg_quality": jpeg_quality,
+        "preview_width": int(_original_frame_w),
+        "preview_height": int(_original_frame_h),
+        "preserve_source_resolution": bool(
+            preview_defaults.get("preserve_source_resolution", True)
+        ),
+    }
     stop_event = threading.Event()
     from tf_common.monitoring.live_metrics import record_stream_state
     record_stream_state(camera_id, "starting")
 
-    # Dedicated encode thread with bounded work queue — offloads cv2.imencode
-    # (~15-25ms per 1280x720 frame) so the capture loop never blocks on it.
-    # The encode work queue is bounded (maxsize=2) so the capture thread drops
-    # frames when encode can't keep up, preventing unbounded memory growth.
-    _encode_work_q: Queue = Queue(maxsize=2)
+    # ── Full-resolution paced preview ─────────────────────────────────────
+    # Detection runs as fast as possible and never waits on JPEG encode.
+    # A dedicated thread samples the *latest* full-res annotated frame at a
+    # stable preview_fps so the browser sees smooth motion without downscale.
+    _preview_lock = threading.Lock()
+    _preview_frame: np.ndarray | None = None
+    _preview_seq = 0
+
+    def _publish_preview_frame(annotated: np.ndarray) -> None:
+        """Store latest full-res annotated frame for the paced encoder."""
+        nonlocal _preview_frame, _preview_seq
+        # Preserve source resolution: never resize before encode.
+        with _preview_lock:
+            if (
+                _preview_frame is None
+                or _preview_frame.shape != annotated.shape
+                or _preview_frame.dtype != annotated.dtype
+            ):
+                _preview_frame = annotated.copy()
+            else:
+                np.copyto(_preview_frame, annotated)
+            _preview_seq += 1
 
     def _encode_worker():
-        """Background thread: JPEG-encode annotated frames from the work queue."""
+        """Pace JPEG encode of the newest full-res frame for smooth MJPEG."""
+        nonlocal _preview_frame, _preview_seq
+        last_seq = -1
+        interval = 1.0 / preview_target_fps
         while not stop_event.is_set():
-            try:
-                to_encode = _encode_work_q.get(timeout=0.5)
-            except Empty:
-                continue
-            try:
-                # Quality 50 (down from 65) — the annotated frame is viewed
-                # at stream resolution, not archival quality. This halves the
-                # encode time and cuts bandwidth by ~40%.
-                _, jpeg = cv2.imencode(".jpg", to_encode, [cv2.IMWRITE_JPEG_QUALITY, 50])
-                jpeg_bytes = jpeg.tobytes()
+            t0 = time.monotonic()
+            frame_copy: np.ndarray | None = None
+            with _preview_lock:
+                if _preview_frame is not None and _preview_seq != last_seq:
+                    last_seq = _preview_seq
+                    frame_copy = _preview_frame.copy()
+            if frame_copy is not None:
                 try:
-                    annotated_queue.put_nowait(jpeg_bytes)
-                except Full:
-                    with suppress(Empty):
-                        annotated_queue.get_nowait()
-                    with suppress(Full):
-                        annotated_queue.put_nowait(jpeg_bytes)
-            except (ValueError, Empty, Full):
-                pass
+                    ok, jpeg = cv2.imencode(
+                        ".jpg",
+                        frame_copy,
+                        [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
+                    )
+                    if ok:
+                        jpeg_bytes = jpeg.tobytes()
+                        try:
+                            annotated_queue.put_nowait(jpeg_bytes)
+                        except Full:
+                            with suppress(Empty):
+                                annotated_queue.get_nowait()
+                            with suppress(Full):
+                                annotated_queue.put_nowait(jpeg_bytes)
+                except (ValueError, cv2.error):
+                    logger.debug("Preview encode failed for %s", camera_id, exc_info=True)
+            elapsed = time.monotonic() - t0
+            time.sleep(max(0.0, interval - elapsed))
 
     encode_thread = threading.Thread(
         target=_encode_worker,
@@ -448,9 +516,10 @@ def _start_pipeline(
     )
     encode_thread.start()
 
-    # MotionDetector — skips YOLO entirely on static frames (saves 40-60% GPU)
+    # MotionDetector is auto-disabled for youtube_live/rtsp (always True).
+    # Keep for file sources only — live traffic must not skip YOLO frames.
     _motion_detector = (
-        _MotionDetector(threshold=0.03, source_type=source_type)
+        _MotionDetector(threshold=0.02, source_type=source_type)
         if _MotionDetector is not None
         else None
     )
@@ -701,27 +770,16 @@ def _start_pipeline(
                             crop_bytes,
                         ))
 
-                    # 5. Annotate in-place on pipeline_frame (avoids ~6 MB copy per frame)
+                    # 5. Annotate in-place on full-resolution pipeline_frame
+                    # (never downscale for preview — quality = source frame_size).
                     t_annotate = time.perf_counter()
                     annotated = _annotate(pipeline_frame, display_det, lanes)
                     _log_timing(camera_id, "annotate", (time.perf_counter() - t_annotate) * 1000)
 
-                    # ── Push frame to browser via encode worker thread ──
-                    # cv2.imencode on a 1280x720 frame takes 15-25ms.  Blocking
-                    # the capture loop on encode would cut FPS in half.  Instead
-                    # we push the annotated frame to the encode work queue and
-                    # continue immediately with the next detect cycle.  The work
-                    # queue is bounded (maxsize=2) so memory doesn't grow when
-                    # the browser is slow to consume frames.
+                    # Publish full-res frame for paced preview encoder (non-blocking).
                     t_submit = time.perf_counter()
-                    try:
-                        _encode_work_q.put_nowait(annotated)
-                    except Full:
-                        with suppress(Empty):
-                            _encode_work_q.get_nowait()
-                        with suppress(Full):
-                            _encode_work_q.put_nowait(annotated)
-                    _log_timing(camera_id, "encode_submit", (time.perf_counter() - t_submit) * 1000)
+                    _publish_preview_frame(annotated)
+                    _log_timing(camera_id, "preview_publish", (time.perf_counter() - t_submit) * 1000)
 
                     # ── Persist crossing events to DB ──────────────────
                     for (lane_id, track_id, class_name, direction,
@@ -926,11 +984,16 @@ def _mjpeg_generator(
     fps: float = 25.0,
     stop_event: threading.Event | None = None,
 ):
-    """Stream fresh MJPEG frames until the pipeline is stopped or disconnected."""
+    """Stream fresh MJPEG frames until the pipeline is stopped or disconnected.
+
+    Pacing is owned by the encode worker (stable preview FPS at full source
+    resolution). This generator emits every queued JPEG without dropping —
+    extra rate-limiting here was a major source of output FPS jitter.
+    """
     from tf_common.monitoring.live_metrics import record_output_frame
 
-    interval = 1.0 / max(fps, 1.0)
-    last_emit = 0.0
+    # Poll slightly faster than preview target so the queue never backs up.
+    poll = min(0.5, 1.0 / max(fps * 2.0, 2.0))
     last_fresh = 0.0
     last_stall_emit = 0.0
     # Pre-compute a "NO SIGNAL" placeholder (encoded once, reused on stalls).
@@ -938,9 +1001,8 @@ def _mjpeg_generator(
 
     try:
         while stop_event is None or not stop_event.is_set():
-            timeout = min(interval, 0.5)
             try:
-                jpeg_bytes = queue.get(timeout=timeout)
+                jpeg_bytes = queue.get(timeout=poll)
             except Empty:
                 jpeg_bytes = None
 
@@ -957,17 +1019,12 @@ def _mjpeg_generator(
                                               [cv2.IMWRITE_JPEG_QUALITY, 60])
                         _no_signal = enc.tobytes()
                     last_stall_emit = now
-                    last_emit = now
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + _no_signal + b"\r\n"
                     )
                 continue
 
-            if last_emit and (now - last_emit) < interval:
-                continue
-
-            last_emit = now
             last_fresh = now
             record_output_frame(camera_id)
             yield (
@@ -1048,6 +1105,15 @@ async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_
         if stream is not None:
             meta = stream[2]
             result["vehicle_types"] = dict(meta.get("vehicle_types") or {})
+            result["preview"] = {
+                "width": meta.get("preview_width"),
+                "height": meta.get("preview_height"),
+                "target_fps": meta.get("preview_fps_target"),
+                "jpeg_quality": meta.get("preview_jpeg_quality"),
+                "preserve_source_resolution": meta.get(
+                    "preserve_source_resolution", True
+                ),
+            }
     return result
 
 
@@ -1235,7 +1301,13 @@ async def live_stream_mjpg(
         core, queue, meta, sw, sess, stop_ev = _streams[camera_id]
         meta["connections"] = meta.get("connections", 0) + 1
         meta["last_access"] = time.monotonic()
-        target_fps = float(fps or meta.get("source_fps") or 25.0)
+        # Prefer paced preview target (smooth) over raw source metadata FPS.
+        target_fps = float(
+            fps
+            or meta.get("preview_fps_target")
+            or meta.get("source_fps")
+            or 25.0
+        )
 
     return StreamingResponse(
         _mjpeg_generator(camera_id, queue, fps=target_fps, stop_event=stop_ev),

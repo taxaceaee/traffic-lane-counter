@@ -20,13 +20,14 @@ class YoloByteTrackAdapter:
         self.detector_config = config.get("detector", {})
         self.tracking_config = config.get("tracking", {})
 
-        self.imgsz = self.detector_config.get("imgsz", 960)
-        self.conf = self.detector_config.get("conf", 0.35)
-        self.iou = self.detector_config.get("iou", 0.5)
+        self.imgsz = int(self.detector_config.get("imgsz", 1280))
+        self.conf = float(self.detector_config.get("conf", 0.25))
+        self.iou = float(self.detector_config.get("iou", 0.45))
+        self.max_det = int(self.detector_config.get("max_detections", 500))
         self.tracker_config = self.tracking_config.get("tracker", "bytetrack.yaml")
-        # Run full detection every N frames; intermediate frames use cached detections.
-        # Set to 1 (default) to detect every frame.
-        self.detect_every_n = max(1, self.detector_config.get("detect_every_n_frames", 1))
+        # Run full detection every N frames; intermediate frames reuse cache.
+        # Default 1 = detect every frame (max recall for live traffic).
+        self.detect_every_n = max(1, int(self.detector_config.get("detect_every_n_frames", 1)))
 
         self.names = self.detector.model.names
         self.allowed_classes = self.detector_config.get("allowed_classes", [])
@@ -41,18 +42,22 @@ class YoloByteTrackAdapter:
         self._cached_raw: list[dict[str, Any]] = []
         self._half_retry_disabled = False
 
+    def _track_kwargs(self) -> dict[str, Any]:
+        return {
+            "persist": True,
+            "imgsz": self.imgsz,
+            "conf": self.conf,
+            "iou": self.iou,
+            "max_det": self.max_det,
+            "tracker": self.tracker_config,
+            "classes": self.allowed_class_indices if self.allowed_class_indices else None,
+            "verbose": False,
+        }
+
     def _run_track(self, frame: np.ndarray):
+        kwargs = self._track_kwargs()
         try:
-            return self.detector.model.track(
-                source=frame,
-                persist=True,
-                imgsz=self.imgsz,
-                conf=self.conf,
-                iou=self.iou,
-                tracker=self.tracker_config,
-                classes=self.allowed_class_indices if self.allowed_class_indices else None,
-                verbose=False,
-            )
+            return self.detector.model.track(source=frame, **kwargs)
         except RuntimeError as exc:
             err = str(exc)
             dtype_mismatch = "same dtype" in err or "Half !=" in err or "c10::Half" in err
@@ -66,16 +71,7 @@ class YoloByteTrackAdapter:
             predictor = getattr(self.detector.model, "predictor", None)
             if predictor is not None:
                 predictor.model = None
-            return self.detector.model.track(
-                source=frame,
-                persist=True,
-                imgsz=self.imgsz,
-                conf=self.conf,
-                iou=self.iou,
-                tracker=self.tracker_config,
-                classes=self.allowed_class_indices if self.allowed_class_indices else None,
-                verbose=False,
-            )
+            return self.detector.model.track(source=frame, **kwargs)
 
     def track(self, frame: np.ndarray) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Runs detection+tracking on a single frame using one inference call.

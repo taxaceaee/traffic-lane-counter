@@ -1,15 +1,21 @@
 {
   "api_url": "http://localhost:8000",
   "detection": {
-    "confidence": 0.35,
-    "iou": 0.5,
-    "imgsz": 640,
+    "confidence": 0.25,
+    "iou": 0.45,
+    "imgsz": 1280,
     "half": true,
-    "detect_every_n_frames": 2,
+    "detect_every_n_frames": 1,
     "tracker": "bytetrack",
-    "track_buffer": 30,
-    "max_detections": 300,
-    "roi_crop": true
+    "track_buffer": 45,
+    "max_detections": 500,
+    "roi_crop": true,
+    "roi_padding": 80
+  },
+  "preview": {
+    "jpeg_quality": 85,
+    "target_fps": 25,
+    "preserve_source_resolution": true
   },
   "storage": {
     "output_dir": "./output",

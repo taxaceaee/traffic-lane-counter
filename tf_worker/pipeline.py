@@ -96,7 +96,7 @@ class TrafficFlowPipeline:
         # so DetectionCore processes only the relevant area.
         self._roi: CropROI | None = None
         if self.config.get("detector", {}).get("roi_crop", False):
-            roi_padding = int(self.config.get("roi_padding", 50))
+            roi_padding = int(self.config.get("roi_padding", 80))
             try:
                 self._roi = CropROI(
                     self.config["lanes"],
@@ -104,10 +104,7 @@ class TrafficFlowPipeline:
                     padding=roi_padding,
                 )
                 crop_config = self._roi.transform_config(self.config)
-                # Override imgsz to match crop size — avoids wasteful
-                # up-scaling of small crops and lossy down-scaling of
-                # large crops. The image is already at a good resolution
-                # for the ROI.
+                # Native ROI imgsz — no intentional downscale of the crop.
                 crop_config.setdefault("detector", {})
                 crop_config["detector"]["imgsz"] = self._roi.suggested_imgsz()
                 self._core = DetectionCore(crop_config, detector=self._injected_detector)

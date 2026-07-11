@@ -19,15 +19,23 @@ _SETTINGS_PATH = Path("configs/settings.json")
 _DEFAULTS: dict[str, Any] = {
     "api_url": "http://localhost:8000",
     "detection": {
-        "confidence": 0.35,
-        "iou": 0.5,
-        "imgsz": 640,
+        # Favor recall: detect every frame at native ROI resolution.
+        "confidence": 0.25,
+        "iou": 0.45,
+        "imgsz": 1280,
         "half": True,
-        "detect_every_n_frames": 2,
+        "detect_every_n_frames": 1,
         "tracker": "bytetrack",
-        "track_buffer": 30,
-        "max_detections": 300,
+        "track_buffer": 45,
+        "max_detections": 500,
         "roi_crop": True,
+        "roi_padding": 80,
+    },
+    # Live preview is always full source resolution; pace for smoothness.
+    "preview": {
+        "jpeg_quality": 85,
+        "target_fps": 25,
+        "preserve_source_resolution": True,
     },
     "storage": {
         "output_dir": "./output",
@@ -90,6 +98,11 @@ def get_default_settings() -> dict[str, Any]:
 
 def get_detection_defaults() -> dict[str, Any]:
     return dict(get_settings().get("detection", _DEFAULTS["detection"]))
+
+
+def get_preview_defaults() -> dict[str, Any]:
+    """Live MJPEG preview knobs (full-res, paced encode)."""
+    return dict(get_settings().get("preview", _DEFAULTS["preview"]))
 
 
 def get_system_config() -> dict[str, Any]:

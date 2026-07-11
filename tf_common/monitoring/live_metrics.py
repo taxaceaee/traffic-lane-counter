@@ -141,6 +141,13 @@ def _window_fps(values: deque[float]) -> float:
     return round(count / _FPS_WINDOW_SEC, 1) if count > 0 else 0.0
 
 
+def _ema(prev: float, sample: float, alpha: float = 0.35) -> float:
+    """Exponential moving average — damps UI jitter without hiding zeros."""
+    if prev <= 0:
+        return sample
+    return round(prev * (1.0 - alpha) + sample * alpha, 1)
+
+
 def record_frame(
     camera_id: str,
     timing_ms: dict[str, float],
@@ -169,8 +176,12 @@ def record_frame(
             entry["source_fps"] = round(max(source_fps, 0.0), 1)
         _trim_window(entry["process_timestamps"], now)
         _trim_window(entry["output_timestamps"], now)
-        entry["process_fps"] = _window_fps(entry["process_timestamps"])
-        entry["output_fps"] = _window_fps(entry["output_timestamps"])
+        raw_process = _window_fps(entry["process_timestamps"])
+        raw_output = _window_fps(entry["output_timestamps"])
+        entry["process_fps_raw"] = raw_process
+        entry["output_fps_raw"] = raw_output
+        entry["process_fps"] = _ema(float(entry.get("process_fps") or 0.0), raw_process)
+        entry["output_fps"] = _ema(float(entry.get("output_fps") or 0.0), raw_output)
 
         # Average latency (last N frames)
         if entry["latencies_ms"]:
@@ -198,7 +209,9 @@ def record_output_frame(camera_id: str) -> None:
             entry["status"] = "active"
         entry["output_timestamps"].append(now)
         _trim_window(entry["output_timestamps"], now)
-        entry["output_fps"] = _window_fps(entry["output_timestamps"])
+        raw_output = _window_fps(entry["output_timestamps"])
+        entry["output_fps_raw"] = raw_output
+        entry["output_fps"] = _ema(float(entry.get("output_fps") or 0.0), raw_output)
 
 
 def record_stream_state(
@@ -280,8 +293,10 @@ def get_camera_metrics(camera_id: str) -> dict[str, Any]:
             "camera_id": camera_id,
             "fps": entry["process_fps"],
             "process_fps": entry["process_fps"],
+            "process_fps_raw": entry.get("process_fps_raw", entry["process_fps"]),
             "source_fps": entry["source_fps"],
             "output_fps": entry["output_fps"],
+            "output_fps_raw": entry.get("output_fps_raw", entry["output_fps"]),
             "avg_latency_ms": entry["avg_latency_ms"],
             "gpu_util_pct": entry["gpu_util_pct"],
             "gpu_available": _gpu_available(),
