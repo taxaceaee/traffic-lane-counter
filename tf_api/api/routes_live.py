@@ -532,6 +532,7 @@ def _start_pipeline(
     _session_seen_track_ids: set[int] = set()
     _last_published_vehicle_types: dict[str, int] | None = None
     stream_meta["vehicle_types"] = {}
+    stream_meta["occupancy"] = {}
 
     def _capture_loop():
         nonlocal core, lanes, roi, _original_frame_w, _original_frame_h
@@ -825,6 +826,10 @@ def _start_pipeline(
 
                     # ── Publish live occupancy snapshot ────────────────
                     occupancy = det.get("occupancy", {}) or {}
+                    # Always mirror the latest live occupancy into stream_meta so
+                    # /live/{id}/metrics can hydrate the SPA per-camera on load
+                    # (DB occupancy/latest is line-crossing based and often empty).
+                    stream_meta["occupancy"] = dict(occupancy)
                     # Publish an initial/changed snapshot even when the camera
                     # is empty. The old truthy-only check left the UI stale at
                     # zero and the Redis payload lacked the frontend event
@@ -1098,13 +1103,15 @@ async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_
     """Return real-time input/process/output FPS, latency, and GPU metrics."""
     from tf_common.monitoring.live_metrics import get_camera_metrics
     result = get_camera_metrics(camera_id)
-    # Attach session vehicle-type tallies from the active live pipeline so the
-    # SPA can keep Vehicle Types (Session) fresh even if a WS frame is missed.
+    # Attach per-camera live pipeline state (session vehicle types + occupancy)
+    # so the SPA can hydrate panels on camera switch without relying on DB
+    # line-crossing aggregates.
     with _lock:
         stream = _streams.get(camera_id)
         if stream is not None:
             meta = stream[2]
             result["vehicle_types"] = dict(meta.get("vehicle_types") or {})
+            result["occupancy"] = dict(meta.get("occupancy") or {})
             result["preview"] = {
                 "width": meta.get("preview_width"),
                 "height": meta.get("preview_height"),
@@ -1114,6 +1121,9 @@ async def live_camera_metrics(camera_id: str, _user: dict = Depends(get_current_
                     "preserve_source_resolution", True
                 ),
             }
+        else:
+            result.setdefault("vehicle_types", {})
+            result.setdefault("occupancy", {})
     return result
 
 

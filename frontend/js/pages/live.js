@@ -1,17 +1,62 @@
+// Per-camera live panel state. Always scoped to `_lastLiveCam` so switching
+// cameras never mixes occupancy / session types / lane-changes.
+let _liveLaneIds = [];
+let _liveLaneChanges = [];
+let _liveOccupancy = {};
+let _liveLoadGeneration = 0;
+
+// True after the live pipeline has published absolute vehicle_types at least
+// once for the current camera. When set, ignore count_event increments so
+// line-crossing events cannot double-count on top of unique-track tallies.
+let _hasLiveVehicleTypes = false;
+
+function _emptySessionCounts() {
+    return { car: 0, motorcycle: 0, motorbike: 0, truck: 0, bus: 0 };
+}
+
+function _normalizeOccupancyMap(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    const out = {};
+    Object.entries(data).forEach(([lane, count]) => {
+        const key = String(lane || '').trim();
+        if (!key || key === 'no_recent_data') return;
+        const n = Number(count);
+        out[key] = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    });
+    return out;
+}
+
+function _occupancyForDisplay(data) {
+    const occ = _normalizeOccupancyMap(data);
+    // Always show this camera's configured lanes (even at 0) so the panel is
+    // camera-specific and never looks "stuck" on another camera's layout.
+    if (_liveLaneIds.length) {
+        const merged = {};
+        _liveLaneIds.forEach((id) => { merged[id] = occ[id] || 0; });
+        Object.keys(occ).forEach((id) => {
+            if (!(id in merged)) merged[id] = occ[id];
+        });
+        return merged;
+    }
+    return occ;
+}
+
 function renderLiveOccupancy(data) {
     const occList = document.getElementById('live-occupancy-list');
     if (!occList) return;
-    if (!data || !Object.keys(data).length) {
-        occList.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">No vehicles detected</p>';
+    const occ = _occupancyForDisplay(data);
+    _liveOccupancy = occ;
+    const entries = Object.entries(occ).sort((a, b) => a[0].localeCompare(b[0]));
+    if (!entries.length) {
+        occList.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">No lanes configured for this camera</p>';
         return;
     }
-    const entries = Object.entries(data).sort((a, b) => a[0].localeCompare(b[0]));
-    const maxCount = Math.max(...Object.values(data), 1);
+    const maxCount = Math.max(...entries.map(([, c]) => c), 1);
     occList.innerHTML = entries.map(([lane, count]) => {
         const pct = Math.round(count / maxCount * 100);
         return `<div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
             <div class="flex justify-between mb-1.5">
-                <span class="text-xs font-medium text-slate-300">${lane}</span>
+                <span class="text-xs font-medium text-slate-300">${escapeHtml(lane)}</span>
                 <span class="text-xs font-bold text-white">${count} veh</span>
             </div>
             <div class="w-full bg-slate-800 h-1 rounded-full">
@@ -21,25 +66,57 @@ function renderLiveOccupancy(data) {
     }).join('');
 }
 
+function _normalizeLaneChange(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const trackRaw = raw.track_id;
+    if (trackRaw === undefined || trackRaw === null || trackRaw === '') return null;
+    const trackStr = String(trackRaw).trim();
+    // Drop placeholder / empty-state scrapes ("No events yet") and junk rows.
+    if (!trackStr || /^no events/i.test(trackStr) || trackStr === '—' || trackStr === '-') {
+        return null;
+    }
+    return {
+        track_id: trackStr,
+        previous_lane_id: raw.previous_lane_id || raw.previous_stable_lane || '—',
+        current_lane_id: raw.current_lane_id || raw.current_stable_lane || '—',
+        frame_id: raw.frame_id ?? raw.frame ?? '—',
+    };
+}
+
 function renderLaneChanges(changes) {
     const tbody = document.getElementById('live-lane-changes-tbody');
     if (!tbody) return;
-    if (!changes || !changes.length) {
+    const normalized = (Array.isArray(changes) ? changes : [])
+        .map(_normalizeLaneChange)
+        .filter(Boolean)
+        .slice(0, 5);
+    _liveLaneChanges = normalized;
+    if (!normalized.length) {
         tbody.innerHTML = '<tr><td colspan="4" class="py-2 text-center text-slate-600 text-xs">No events yet</td></tr>';
         return;
     }
-    tbody.innerHTML = changes.map(e => `
-        <tr class="border-b border-slate-800/50">
-            <td class="py-1.5 text-white">#${e.track_id}</td>
+    tbody.innerHTML = normalized.map((e) => `
+        <tr class="border-b border-slate-800/50" data-live-lane-change="1">
+            <td class="py-1.5 text-white">#${escapeHtml(e.track_id)}</td>
             <td class="py-1.5 text-slate-400">${escapeHtml(e.previous_lane_id || '—')}</td>
             <td class="py-1.5 text-emerald-400 font-semibold">${escapeHtml(e.current_lane_id || '—')}</td>
-            <td class="py-1.5 text-slate-500">${e.frame_id}</td>
+            <td class="py-1.5 text-slate-500">${escapeHtml(e.frame_id)}</td>
         </tr>
     `).join('');
 }
 
-function _emptySessionCounts() {
-    return { car: 0, motorcycle: 0, motorbike: 0, truck: 0, bus: 0 };
+function prependLiveLaneChange(event) {
+    const incoming = _normalizeLaneChange(event);
+    if (!incoming) return;
+    const next = [
+        incoming,
+        ..._liveLaneChanges.filter((e) => !(
+            String(e.track_id) === String(incoming.track_id)
+            && String(e.frame_id) === String(incoming.frame_id)
+            && String(e.current_lane_id) === String(incoming.current_lane_id)
+        )),
+    ].slice(0, 5);
+    renderLaneChanges(next);
 }
 
 function updateVehicleTypeDisplay() {
@@ -62,11 +139,6 @@ function updateVehicleTypeDisplay() {
     barEl('live-type-bus-bar', (bus / total * 100) + '%');
 }
 
-// True after the live pipeline has published absolute vehicle_types at least
-// once for the current camera. When set, ignore count_event increments so
-// line-crossing events cannot double-count on top of unique-track tallies.
-let _hasLiveVehicleTypes = false;
-
 /**
  * Apply absolute session vehicle-type tallies from the live pipeline.
  * Keys are detector class names (car, motorcycle, truck, bus, …).
@@ -85,6 +157,28 @@ function applySessionVehicleTypes(types) {
     _sessionCounts = next;
     _hasLiveVehicleTypes = true;
     updateVehicleTypeDisplay();
+}
+
+function _resetLivePanelsForCamera() {
+    _sessionCounts = _emptySessionCounts();
+    _hasLiveVehicleTypes = false;
+    _liveLaneChanges = [];
+    _liveOccupancy = {};
+    updateVehicleTypeDisplay();
+    renderLaneChanges([]);
+    // Occupancy waits for lane ids (or live metrics) so we don't flash wrong cam.
+    const occList = document.getElementById('live-occupancy-list');
+    if (occList) {
+        occList.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">Loading camera…</p>';
+    }
+}
+
+function _isLiveMessageForCamera(msg, cameraId) {
+    if (!msg || !cameraId) return false;
+    // Some envelopes put camera_id on the root; others only inside data.
+    const cid = msg.camera_id || (msg.data && msg.data.camera_id) || null;
+    if (!cid) return false;
+    return String(cid) === String(cameraId);
 }
 
 async function _setProtectedImage(imgEl, url) {
@@ -123,15 +217,15 @@ async function loadLiveCameraData() {
     if (!selectEl) return;
     const camera_id = selectEl.value;
     if (!camera_id) return;
+
+    // Invalidate in-flight loads from a previous camera selection.
+    const loadGen = ++_liveLoadGeneration;
     _lastLiveCam = camera_id;
     localStorage.setItem('live_camera_id', camera_id);
 
-    // Reset until live pipeline publishes real session tallies. Historical
-    // counts/summary is 24h line-crossing data — not "Session" and often empty
-    // when no counting line is configured.
-    _sessionCounts = _emptySessionCounts();
-    _hasLiveVehicleTypes = false;
-    updateVehicleTypeDisplay();
+    // Hard-reset side panels immediately so previous camera data never lingers.
+    _liveLaneIds = [];
+    _resetLivePanelsForCamera();
     // Fresh camera view starts at 1x so pan offset from previous cam is not kept.
     liveZoomReset();
 
@@ -141,25 +235,43 @@ async function loadLiveCameraData() {
         _showSnapshot(container, camera_id);
     }
 
-    // Step 2: Fetch occupancy, live metrics (session vehicle types), lane changes
-    const [occ, metrics, changes] = await Promise.all([
-        apiRequest(`/api/cameras/${camera_id}/occupancy/latest`),
+    // Step 2: Load this camera's lanes + live metrics + recent lane-changes.
+    // Prefer live pipeline occupancy/vehicle_types (per active stream session)
+    // over DB occupancy/latest (line-crossing based, often empty / wrong).
+    const [lanesPayload, metrics, changes] = await Promise.all([
+        apiRequest(`/api/cameras/${encodeURIComponent(camera_id)}/lanes`),
         apiRequest('/live/' + encodeURIComponent(camera_id) + '/metrics'),
-        apiRequest(`/api/cameras/${camera_id}/lane-changes?limit=5`),
+        apiRequest(`/api/cameras/${encodeURIComponent(camera_id)}/lane-changes?limit=5`),
     ]);
 
-    renderLiveOccupancy(occ ? occ.occupancy : null);
+    // Aborted: user switched camera while requests were in flight.
+    if (loadGen !== _liveLoadGeneration || _lastLiveCam !== camera_id) return;
 
-    // Prefer absolute session tallies from the running pipeline (unique tracks
-    // by detector class_name). Available once the stream has processed frames.
+    const laneRows = Array.isArray(lanesPayload)
+        ? lanesPayload
+        : (lanesPayload && Array.isArray(lanesPayload.lanes) ? lanesPayload.lanes : []);
+    _liveLaneIds = laneRows
+        .map((l) => l && (l.lane_id || l.id))
+        .filter(Boolean)
+        .map(String);
+
+    // Live occupancy from running pipeline for THIS camera only.
+    const liveOcc = metrics && metrics.occupancy
+        ? metrics.occupancy
+        : {};
+    renderLiveOccupancy(liveOcc);
+
+    // Session vehicle types from this camera's pipeline (reset already done).
     if (metrics && metrics.vehicle_types) {
         applySessionVehicleTypes(metrics.vehicle_types);
+    } else {
+        updateVehicleTypeDisplay();
     }
 
-    // Step 3: Render lane changes (uses previous_lane_id/current_lane_id from backend)
-    renderLaneChanges(changes);
+    // Lane-change history for this camera only.
+    renderLaneChanges(Array.isArray(changes) ? changes : []);
 
-    // Step 4: Start MJPEG — insert <img> directly, pipeline auto-starts on browser request
+    // Step 3: Start MJPEG + WS + polls scoped to this camera_id.
     _startMJPEGStream(camera_id);
     startLiveMetricsPolling(camera_id);
     connectLiveWS(camera_id);
@@ -592,6 +704,7 @@ function startLiveMetricsPolling(cameraId) {
         if (_lastLiveCam !== cameraId) { clearInterval(_liveMetricsTimer); return; }
         try {
             const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
+            if (_lastLiveCam !== cameraId) return;
             const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
             renderLiveErrorDiagnostic(m && m.error_details);
             if (!m || (m.process_fps === undefined && !m.avg_latency_ms)) {
@@ -607,6 +720,10 @@ function startLiveMetricsPolling(cameraId) {
             set('live-output-fps', m.output_fps > 0 ? m.output_fps.toFixed(1) : '—');
             set('live-latency', m.avg_latency_ms > 0 ? m.avg_latency_ms.toFixed(0) + 'ms' : '—');
             set('live-gpu', m.gpu_available && m.gpu_util_pct >= 0 ? m.gpu_util_pct.toFixed(0) + '%' : 'N/A');
+            // Keep side panels in sync with THIS camera's live pipeline.
+            if (m.occupancy && typeof m.occupancy === 'object') {
+                renderLiveOccupancy(m.occupancy);
+            }
             if (m.vehicle_types) {
                 applySessionVehicleTypes(m.vehicle_types);
             }
@@ -631,7 +748,8 @@ function connectLiveWS(cameraId) {
     try {
         _ws = new WebSocket(wsProto + '://' + wsHost + '/ws/live');
         _ws.onopen = () => {
-            _ws.send(JSON.stringify({ token, cameras: cameraId }));
+            // Subscribe only to the selected camera (comma-separated string API).
+            _ws.send(JSON.stringify({ token, cameras: String(cameraId) }));
         };
         _ws.onmessage = (event) => {
             try {
@@ -639,55 +757,60 @@ function connectLiveWS(cameraId) {
                 if (msg.type === 'ping') { _ws.send(JSON.stringify({type:'pong'})); return; }
                 if (msg.type === 'connected') return;
 
-                if (msg.type === 'occupancy_update' && activeTab === 'live') {
+                // Alerts are global; everything else is camera-scoped.
+                if (msg.type === 'alert' && msg.data) {
+                    showAlertToast(msg.data);
+                    updateAlertBadge();
+                    if (activeTab === 'alerts') refreshAlerts();
+                    return;
+                }
+
+                // Drop events from other cameras / stale subscriptions.
+                if (!_isLiveMessageForCamera(msg, cameraId) || _lastLiveCam !== cameraId) {
+                    return;
+                }
+                if (activeTab !== 'live') return;
+
+                if (msg.type === 'occupancy_update') {
                     const payload = msg.data || {};
                     const occData = payload.occupancy != null ? payload.occupancy : payload;
                     renderLiveOccupancy(occData);
-                    // Absolute session tallies from unique live tracks.
                     if (payload.vehicle_types) {
                         applySessionVehicleTypes(payload.vehicle_types);
                     }
+                    return;
                 }
 
                 // Fallback for older servers that only emit count_event and
                 // never attach absolute vehicle_types on occupancy_update.
-                if (msg.type === 'count_event' && activeTab === 'live' && !_hasLiveVehicleTypes) {
+                if (msg.type === 'count_event' && !_hasLiveVehicleTypes) {
                     const payload = msg.data || {};
                     const cls = String(payload.class_name || payload.vehicle_type || '').toLowerCase();
                     if (cls) {
                         _sessionCounts[cls] = (_sessionCounts[cls] || 0) + 1;
                         updateVehicleTypeDisplay();
                     }
+                    return;
                 }
 
-                if (msg.type === 'lane_change_event' && activeTab === 'live') {
-                    const tbody = document.getElementById('live-lane-changes-tbody');
-                    if (tbody && msg.data) {
-                        const current = Array.from(tbody.querySelectorAll('tr')).map(row => ({
-                            track_id: row.children[0] ? String(row.children[0].textContent || '').replace('#', '') : '',
-                            previous_lane_id: row.children[1] ? row.children[1].textContent : '',
-                            current_lane_id: row.children[2] ? row.children[2].textContent : '',
-                            frame_id: row.children[3] ? row.children[3].textContent : '',
-                        })).filter(item => item.track_id);
-                        const incoming = {
-                            track_id: msg.data.track_id,
-                            previous_lane_id: msg.data.previous_lane_id,
-                            current_lane_id: msg.data.current_lane_id,
-                            frame_id: msg.data.frame_id,
-                        };
-                        renderLaneChanges([incoming, ...current].slice(0, 5));
-                    }
-                }
-
-                if (msg.type === 'alert' && msg.data) {
-                    showAlertToast(msg.data);
-                    updateAlertBadge();
-                    if (activeTab === 'alerts') refreshAlerts();
+                if (msg.type === 'lane_change_event' && msg.data) {
+                    // In-memory prepend — never scrape DOM (avoids "#No events yet").
+                    prependLiveLaneChange({
+                        track_id: msg.data.track_id,
+                        previous_lane_id: msg.data.previous_lane_id
+                            || msg.data.previous_stable_lane,
+                        current_lane_id: msg.data.current_lane_id
+                            || msg.data.current_stable_lane,
+                        frame_id: msg.data.frame_id ?? msg.data.frame,
+                    });
                 }
             } catch(e) {}
         };
         _ws.onclose = () => {
-            _wsReconnectTimer = setTimeout(() => connectLiveWS(cameraId), 10000);
+            if (_lastLiveCam !== cameraId) return;
+            _wsReconnectTimer = setTimeout(() => {
+                if (_lastLiveCam === cameraId) connectLiveWS(cameraId);
+            }, 10000);
         };
         _ws.onerror = () => { if (_ws) _ws.close(); };
     } catch(e) {}

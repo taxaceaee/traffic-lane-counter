@@ -23,3 +23,6 @@ def test_live_redis_messages_use_frontend_event_envelopes():
     assert "_session_class_counts" in source
     assert "_session_seen_track_ids" in source
     assert 'result["vehicle_types"]' in source
+    # Live occupancy must be mirrored per-camera for SPA panel hydration.
+    assert 'stream_meta["occupancy"]' in source
+    assert 'result["occupancy"]' in source
