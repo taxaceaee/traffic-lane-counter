@@ -1,4 +1,4 @@
-# AGENTS.md - Trạng thái hiện tại của `vehicle_counting` (cập nhật 2026-07-09)
+# AGENTS.md - Trạng thái hiện tại của `vehicle_counting` (cập nhật 2026-07-11)
 
 ## Runtime active
 
@@ -49,13 +49,13 @@ docker compose -f deploy/stack/docker-compose.yml up --build
 
 ## Utility scripts còn giữ lại
 
-- `scripts/benchmark_model.py` - benchmark FPS model cục bộ
-- `scripts/run_benchmark.py` - benchmark pipeline/report
-- `scripts/import_jsonl.py` - import output JSONL vào DB
+- `scripts/serve_frontend.py` - SPA local server
 - `scripts/seed_db.py` - seed dữ liệu demo
+- `scripts/import_jsonl.py` - import output JSONL vào DB
+- `scripts/run_occupancy.py` - chạy 1 job pipeline offline
 
 ## Ghi chú dọn repo
 
-- Nếu một file/script chỉ còn phục vụ migration cũ, chuyển sang `legacy/`.
-- Nếu một tài liệu generated không còn bám runtime hiện tại, xóa thay vì giữ snapshot stale.
+- Không giữ DETRAC/benchmark stack trong runtime tree.
+- Không commit audit generated / `test-reports/`.
 - Weight mặc định nằm trong `weights/`, không để file model rơi ở repo root.

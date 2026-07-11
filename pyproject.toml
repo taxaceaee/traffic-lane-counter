@@ -45,8 +45,6 @@ dev = [
 ]
 
 [project.scripts]
-run-benchmark = "scripts.run_benchmark:main"
-benchmark-model = "scripts.benchmark_model:main"
 run-occupancy = "scripts.run_occupancy:main"
 import-jsonl = "scripts.import_jsonl:main"
 seed-db = "scripts.seed_db:main"

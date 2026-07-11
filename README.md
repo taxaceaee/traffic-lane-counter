@@ -43,26 +43,21 @@ This repo is now organized around the pieces you can deploy independently:
 # 1. Install dependencies
 python3 -m pip install -e ".[dev]"
 
-# 2. Run pipeline on a video file
-python3 -m scripts.run_occupancy --source data/video.mp4 --config configs/mvi_40864_config.yaml --output-dir outputs/demo
-
-# 3. Start API server
-python3 -m uvicorn tf_api.main:app --host 0.0.0.0 --port 8000
-
-# Or start the complete local development entrypoint
+# 2. Start API + SPA (local development)
 npm run dev
+# Login (fresh DB): admin / admin123
+# If port 8000 is busy, development mode picks the next free port.
 
-# On a fresh local database the development entrypoint creates:
-# username: admin  password: admin123
-# If port 8000 is busy, development mode selects the next free port and
-# prints the actual URL. Use PORT=8000 to require a fixed port.
-# On an NVIDIA host, the local bootstrap installs CUDA 12.1 Torch wheels and
-# enables half precision; set FORCE_CPU=true only for CPU-only development.
-
-# 4. Serve the standalone frontend locally
+# 3. Optional: standalone frontend
 API_BASE_URL=http://localhost:8000 .venv/bin/python -m scripts.serve_frontend
 
-# 5. Or run the full stack with Docker
+# 4. Optional: offline pipeline job on a video file
+python3 -m scripts.run_occupancy \
+  --source /path/to/video.mp4 \
+  --config configs/cameras/YT_LIVE_TEST.yaml \
+  --output-dir outputs/demo
+
+# 5. Full stack with Docker
 cp deploy/stack/.env.example deploy/stack/.env
 docker compose -f deploy/stack/docker-compose.yml up --build
 ```

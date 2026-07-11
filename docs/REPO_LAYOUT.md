@@ -2,23 +2,21 @@
 
 ## Active runtime
 
-- `tf_api/` - backend API process
-- `tf_worker/` - worker process
-- `tf_db/` - DB layer
-- `tf_core/` - CV/AI domain logic
-- `tf_common/` - shared utilities between services
-- `frontend/` - deployable SPA
-- `configs/` - runtime config files
-- `deploy/api/` - backend container build
-- `deploy/frontend/` - frontend container build
-- `deploy/worker/` - worker container build
-- `deploy/proxy/` - reverse proxy config
-- `deploy/stack/` - full local integration stack
+- `tf_api/` — backend API process
+- `tf_worker/` — worker process (pipeline, storage, video IO)
+- `tf_db/` — database models and repositories
+- `tf_core/` — CV/AI domain logic
+- `tf_common/` — shared utilities
+- `frontend/` — SPA
+- `configs/` — cameras, zones, lanes, models, settings
+- `scripts/` — serve frontend, seed DB, import JSONL, offline pipeline
+- `deploy/` — api / frontend / worker / proxy / stack
+- `tests/` — unit + integration
+- `weights/` — model weights (gitignored binaries; `.gitkeep` tracked)
+- `alembic/` — DB migrations
 
-## Documentation policy
+## Not in runtime
 
-Keep only curated docs that match the live runtime. Remove stale generated docs
-instead of leaving contradictory snapshots in the repo.
-Historical audits and migration notes should be kept only when they explain a
-current runtime decision; otherwise remove them instead of creating another
-archive tree.
+- Local data: `data/`, `outputs/`, `logs/`, `storage/` (gitignored)
+- Generated reports: `test-reports/` (gitignored)
+- DETRAC / offline benchmark suite was removed; use live pipeline + tests instead.

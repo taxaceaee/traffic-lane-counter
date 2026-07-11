@@ -13,6 +13,6 @@
     "lint:fix": ".venv/bin/python -m ruff check --fix .",
     "seed": ".venv/bin/python scripts/seed_db.py",
     "pipeline": ".venv/bin/python -m scripts.run_occupancy",
-    "clean": "find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -type f -name '*.pyc' -delete"
+    "clean": "find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -type f -name '*.pyc' -delete; rm -rf test-reports .pytest_cache"
   }
 }

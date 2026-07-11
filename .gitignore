@@ -11,8 +11,11 @@
 data/
 datasets/
 outputs/
+logs/
+storage/
+test-reports/
 
-# Model weights
+# Model weights (keep weights/.gitkeep)
 *.pt
 *.pth
 *.onnx
@@ -23,6 +26,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.pytest_cache/
 
 # Virtual environment
 .venv/
