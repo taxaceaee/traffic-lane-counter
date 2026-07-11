@@ -877,14 +877,14 @@ def _start_pipeline(
     preview_defaults = get_preview_defaults()
     # Full source resolution is preserved; quality is tuned for encode speed so
     # Output FPS stays close to the preview target on laptop GPUs.
-    jpeg_quality = int(preview_defaults.get("jpeg_quality", 70))
-    # Multi-cam: slightly lower encode cost, but keep a floor so labels stay sharp.
+    # High floor — thin HUD text dies under heavy JPEG quantization.
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 82))
     load = _count_active_pipelines()
     if load >= 2:
-        jpeg_quality = min(jpeg_quality, 68)
+        jpeg_quality = min(jpeg_quality, 78)
     if load >= 3:
-        jpeg_quality = min(jpeg_quality, 64)
-    jpeg_quality = max(62, min(90, jpeg_quality))
+        jpeg_quality = min(jpeg_quality, 74)
+    jpeg_quality = max(72, min(92, jpeg_quality))
     preview_target_fps = float(preview_defaults.get("target_fps", 12) or 12)
     # Cap preview to Process-FPS class rates; high targets only burn CPU.
     preview_target_fps = max(6.0, min(18.0, preview_target_fps))
@@ -1472,30 +1472,43 @@ def _draw_label_box(
     font_scale: float,
     thickness: int,
 ) -> None:
-    """Solid dark pill + white text so labels stay sharp on busy video."""
-    font = cv2.FONT_HERSHEY_SIMPLEX
+    """Solid opaque pill + bright text — readable even under MJPEG + browser zoom."""
+    # DUPLEX is thicker/clearer than SIMPLEX at the same scale on compressed video.
+    font = cv2.FONT_HERSHEY_DUPLEX
     (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-    pad_x, pad_y = 5, 4
-    x, y = origin  # baseline origin (left, bottom of text)
-    x1 = max(0, x)
-    y1 = max(0, y - th - pad_y)
-    x2 = min(canvas.shape[1] - 1, x + tw + pad_x * 2)
-    y2 = min(canvas.shape[0] - 1, y + pad_y)
+    pad_x, pad_y = 8, 6
+    x, y = origin  # preferred baseline origin (left, bottom of text)
+    box_h = th + pad_y * 2 + baseline
+    box_w = tw + pad_x * 2
+    # Prefer above the anchor; if clipped, drop below / shift into frame.
+    x1 = int(x)
+    y2 = int(y)
+    y1 = y2 - box_h
+    if y1 < 0:
+        y1 = max(0, int(y))
+        y2 = y1 + box_h
+    if y2 > canvas.shape[0] - 1:
+        y2 = canvas.shape[0] - 1
+        y1 = max(0, y2 - box_h)
+    if x1 + box_w > canvas.shape[1] - 1:
+        x1 = max(0, canvas.shape[1] - 1 - box_w)
+    x2 = min(canvas.shape[1] - 1, x1 + box_w)
     if x2 <= x1 or y2 <= y1:
         return
-    # Filled background + colored border for contrast.
-    cv2.rectangle(canvas, (x1, y1), (x2, y2), (10, 10, 10), thickness=-1)
-    cv2.rectangle(canvas, (x1, y1), (x2, y2), fg, thickness=max(1, thickness // 2))
-    # White fill is most readable; lane color is on the border only.
+    # Fully opaque black plate (no alpha blend) + thick colored border.
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), thickness=-1)
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), fg, thickness=max(2, thickness))
+    # Pure white, no anti-alias soft edge (keeps glyphs hard under JPEG).
+    text_org = (x1 + pad_x, y2 - pad_y - max(1, baseline // 2))
     cv2.putText(
         canvas,
         text,
-        (x1 + pad_x, y2 - pad_y - max(0, baseline // 2)),
+        text_org,
         font,
         font_scale,
         (255, 255, 255),
         thickness,
-        lineType=cv2.LINE_AA,
+        lineType=cv2.LINE_8,
     )
 
 
@@ -1503,12 +1516,12 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
     """Draw crisp boxes + labels at *preview* resolution (already sized)."""
     canvas = frame  # owned buffer from _preview_canvas
     h, w = canvas.shape[:2]
-    # Scale stroke/font with frame width so 640–1280 previews all stay readable.
-    box_th = max(3, int(round(w / 420)))
+    # Readable on MJPEG without covering half the vehicle (960-wide preview).
+    box_th = max(3, int(round(w / 320)))
     outline_th = box_th + 2
-    font_scale = max(0.55, min(0.85, w / 1100.0))
-    font_th = max(2, int(round(font_scale * 3.2)))
-    lane_th = max(2, box_th - 1)
+    font_scale = max(0.58, min(0.82, w / 1200.0))
+    font_th = max(2, int(round(font_scale * 2.6)))
+    lane_th = max(2, box_th)
     anchor_r = max(4, box_th + 1)
 
     lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
@@ -1556,8 +1569,10 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
         cv2.circle(canvas, (cx, y2), anchor_r + 1, (0, 0, 0), -1, lineType=cv2.LINE_AA)
         cv2.circle(canvas, (cx, y2), anchor_r, box_color, -1, lineType=cv2.LINE_AA)
 
-        label = f"#{t['track_id']} {t['class_name']} ({stable})"
-        label_y = y1 - 6 if y1 > 24 else min(h - 4, y2 + int(18 * font_scale))
+        # Compact but unique; lane color on box already encodes lane.
+        cls = str(t.get("class_name") or "?")
+        label = f"#{t['track_id']} {cls}"
+        label_y = y1 - 8 if y1 > int(28 * font_scale) else min(h - 8, y2 + int(22 * font_scale))
         _draw_label_box(
             canvas,
             label,
