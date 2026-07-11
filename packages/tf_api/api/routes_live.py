@@ -877,14 +877,14 @@ def _start_pipeline(
     preview_defaults = get_preview_defaults()
     # Full source resolution is preserved; quality is tuned for encode speed so
     # Output FPS stays close to the preview target on laptop GPUs.
-    # High floor — thin HUD text dies under heavy JPEG quantization.
-    jpeg_quality = int(preview_defaults.get("jpeg_quality", 82))
+    # Slightly above old defaults so thin outlined text survives encode.
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 72))
     load = _count_active_pipelines()
     if load >= 2:
-        jpeg_quality = min(jpeg_quality, 78)
+        jpeg_quality = min(jpeg_quality, 68)
     if load >= 3:
-        jpeg_quality = min(jpeg_quality, 74)
-    jpeg_quality = max(72, min(92, jpeg_quality))
+        jpeg_quality = min(jpeg_quality, 65)
+    jpeg_quality = max(62, min(85, jpeg_quality))
     preview_target_fps = float(preview_defaults.get("target_fps", 12) or 12)
     # Cap preview to Process-FPS class rates; high targets only burn CPU.
     preview_target_fps = max(6.0, min(18.0, preview_target_fps))
@@ -1463,66 +1463,33 @@ def _scale_lane_geometry(lanes: list[dict], scale: float) -> list[dict]:
     return scaled
 
 
-def _draw_label_box(
+def _draw_outlined_text(
     canvas: np.ndarray,
     text: str,
-    origin: tuple[int, int],
-    fg: tuple[int, int, int],
+    org: tuple[int, int],
+    color: tuple[int, int, int],
     *,
-    font_scale: float,
-    thickness: int,
+    font_scale: float = 0.5,
+    thickness: int = 1,
 ) -> None:
-    """Solid opaque pill + bright text — readable even under MJPEG + browser zoom."""
-    # DUPLEX is thicker/clearer than SIMPLEX at the same scale on compressed video.
-    font = cv2.FONT_HERSHEY_DUPLEX
-    (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-    pad_x, pad_y = 8, 6
-    x, y = origin  # preferred baseline origin (left, bottom of text)
-    box_h = th + pad_y * 2 + baseline
-    box_w = tw + pad_x * 2
-    # Prefer above the anchor; if clipped, drop below / shift into frame.
-    x1 = int(x)
-    y2 = int(y)
-    y1 = y2 - box_h
-    if y1 < 0:
-        y1 = max(0, int(y))
-        y2 = y1 + box_h
-    if y2 > canvas.shape[0] - 1:
-        y2 = canvas.shape[0] - 1
-        y1 = max(0, y2 - box_h)
-    if x1 + box_w > canvas.shape[1] - 1:
-        x1 = max(0, canvas.shape[1] - 1 - box_w)
-    x2 = min(canvas.shape[1] - 1, x1 + box_w)
-    if x2 <= x1 or y2 <= y1:
-        return
-    # Fully opaque black plate (no alpha blend) + thick colored border.
-    cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), thickness=-1)
-    cv2.rectangle(canvas, (x1, y1), (x2, y2), fg, thickness=max(2, thickness))
-    # Pure white, no anti-alias soft edge (keeps glyphs hard under JPEG).
-    text_org = (x1 + pad_x, y2 - pad_y - max(1, baseline // 2))
-    cv2.putText(
-        canvas,
-        text,
-        text_org,
-        font,
-        font_scale,
-        (255, 255, 255),
-        thickness,
-        lineType=cv2.LINE_8,
-    )
+    """Classic HUD text: dark halo + colored fill (no solid nameplate)."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    # Halo a bit thicker than fill so glyphs stay sharp after JPEG.
+    halo = max(thickness + 2, 3)
+    cv2.putText(canvas, text, org, font, font_scale, (0, 0, 0), halo, cv2.LINE_AA)
+    cv2.putText(canvas, text, org, font, font_scale, color, thickness, cv2.LINE_AA)
 
 
 def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.ndarray:
-    """Draw crisp boxes + labels at *preview* resolution (already sized)."""
+    """Classic live overlay at preview resolution — thin boxes, outlined labels."""
     canvas = frame  # owned buffer from _preview_canvas
     h, w = canvas.shape[:2]
-    # Readable on MJPEG without covering half the vehicle (960-wide preview).
-    box_th = max(3, int(round(w / 320)))
-    outline_th = box_th + 2
-    font_scale = max(0.58, min(0.82, w / 1200.0))
-    font_th = max(2, int(round(font_scale * 2.6)))
-    lane_th = max(2, box_th)
-    anchor_r = max(4, box_th + 1)
+    # Slightly firmer than original (was box=2 / font=0.4) for MJPEG, still light.
+    box_th = 2
+    font_scale = 0.5
+    font_th = 1
+    lane_th = 2
+    anchor_r = 5
 
     lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
     crossings = det.get("crossings") or []
@@ -1530,17 +1497,16 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
     for lane_data in lanes:
         lane_color = color_for_lane(lane_data["id"], lane_colors)
         pts = np.array(lane_data["points"], dtype=np.int32).reshape((-1, 1, 2))
-        # Dark under-stroke then color for edge definition.
-        cv2.polylines(canvas, [pts], isClosed=True, color=(0, 0, 0), thickness=lane_th + 2, lineType=cv2.LINE_AA)
+        cv2.polylines(canvas, [pts], isClosed=True, color=(0, 0, 0), thickness=lane_th + 1, lineType=cv2.LINE_AA)
         cv2.polylines(canvas, [pts], isClosed=True, color=lane_color, thickness=lane_th, lineType=cv2.LINE_AA)
         first_pt = lane_data["points"][0]
-        _draw_label_box(
+        _draw_outlined_text(
             canvas,
             str(lane_data["id"]),
-            (int(first_pt[0]) + 4, int(first_pt[1]) - 4),
+            (int(first_pt[0]) + 5, int(first_pt[1]) - 5),
             lane_color,
-            font_scale=font_scale,
-            thickness=font_th,
+            font_scale=0.55,
+            thickness=1,
         )
 
     ftracks = det.get("frame_tracks", [])
@@ -1549,7 +1515,6 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
         if not bbox or len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox]
-        # Clamp to frame so thick strokes don't throw.
         x1 = max(0, min(x1, w - 1))
         x2 = max(0, min(x2, w - 1))
         y1 = max(0, min(y1, h - 1))
@@ -1562,21 +1527,19 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
             raw_lane=t.get("raw_lane"),
         )
         stable = t.get("stable_lane") or t.get("raw_lane") or "none"
-        # Black outer + bright inner box = sharp even after mild JPEG.
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), outline_th, lineType=cv2.LINE_AA)
+        # Thin color box + 1px dark under-stroke for edge definition (not bulky).
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), box_th + 1, lineType=cv2.LINE_AA)
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, box_th, lineType=cv2.LINE_AA)
         cx = (x1 + x2) // 2
-        cv2.circle(canvas, (cx, y2), anchor_r + 1, (0, 0, 0), -1, lineType=cv2.LINE_AA)
-        cv2.circle(canvas, (cx, y2), anchor_r, box_color, -1, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, (cx, y2), anchor_r, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, (cx, y2), max(3, anchor_r - 1), box_color, -1, lineType=cv2.LINE_AA)
 
-        # Compact but unique; lane color on box already encodes lane.
-        cls = str(t.get("class_name") or "?")
-        label = f"#{t['track_id']} {cls}"
-        label_y = y1 - 8 if y1 > int(28 * font_scale) else min(h - 8, y2 + int(22 * font_scale))
-        _draw_label_box(
+        label = f"#{t['track_id']} {t['class_name']} ({stable})"
+        label_y = y1 - 6 if y1 > 18 else min(h - 6, y2 + 16)
+        _draw_outlined_text(
             canvas,
             label,
-            (x1, label_y),
+            (x1 + 3, label_y),
             box_color,
             font_scale=font_scale,
             thickness=font_th,
@@ -1584,48 +1547,39 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
 
     occupancy = det.get("occupancy", {})
     if occupancy:
-        row_h = max(22, int(24 * font_scale))
-        header_h = max(28, int(32 * font_scale))
-        panel_w = max(210, int(230 * font_scale))
-        panel_h = header_h + 12 + len(occupancy) * row_h + 8
-        panel_overlay = np.full((panel_h, panel_w, 3), (12, 12, 12), dtype=np.uint8)
-        panel_roi = canvas[12:12 + panel_h, 12:12 + panel_w]
+        panel_w, panel_h = 200, 40 + len(occupancy) * 25
+        panel_overlay = np.full((panel_h, panel_w, 3), (20, 20, 20), dtype=np.uint8)
+        panel_roi = canvas[15:15 + panel_h, 15:15 + panel_w]
         if panel_roi.shape[0] == panel_h and panel_roi.shape[1] == panel_w:
-            cv2.addWeighted(panel_overlay, 0.82, panel_roi, 0.18, 0, panel_roi)
-        cv2.rectangle(canvas, (12, 12), (12 + panel_w, 12 + panel_h), (220, 220, 220), 2)
+            cv2.addWeighted(panel_overlay, 0.75, panel_roi, 0.25, 0, panel_roi)
+        cv2.rectangle(canvas, (15, 15), (15 + panel_w, 15 + panel_h), (80, 80, 80), 1)
         cv2.putText(
-            canvas, "LANE OCCUPANCY", (22, 12 + header_h - 8),
-            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), font_th, cv2.LINE_AA,
+            canvas, "LANE OCCUPANCY", (25, 35),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA,
         )
-        cv2.line(
-            canvas,
-            (22, 12 + header_h),
-            (12 + panel_w - 12, 12 + header_h),
-            (90, 90, 90),
-            1,
-        )
-        y = 12 + header_h + row_h - 4
+        cv2.line(canvas, (25, 42), (15 + panel_w - 10, 42), (80, 80, 80), 1)
+        y = 62
         for lane_id in sorted(occupancy.keys()):
             lane_color = color_for_lane(lane_id, lane_colors)
             cv2.putText(
-                canvas, f"{lane_id}:", (22, y),
-                cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.95, lane_color, font_th, cv2.LINE_AA,
+                canvas, f"{lane_id}:", (25, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, lane_color, 1, cv2.LINE_AA,
             )
             cv2.putText(
-                canvas, str(occupancy[lane_id]), (12 + panel_w - 48, y),
-                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_th, cv2.LINE_AA,
+                canvas, str(occupancy[lane_id]), (15 + panel_w - 40, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, lane_color, 2, cv2.LINE_AA,
             )
-            y += row_h
+            y += 25
 
     for cx in crossings[:1]:
         flash = f"{cx['class_name']} #{cx['track_id']} {cx['direction']}"
-        _draw_label_box(
+        _draw_outlined_text(
             canvas,
             flash,
-            (16, canvas.shape[0] - 14),
+            (20, canvas.shape[0] - 20),
             (0, 255, 255),
-            font_scale=font_scale,
-            thickness=font_th,
+            font_scale=0.5,
+            thickness=1,
         )
 
     return canvas
