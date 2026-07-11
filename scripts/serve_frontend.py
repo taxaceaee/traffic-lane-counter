@@ -6,7 +6,7 @@ import http.server
 import os
 from pathlib import Path
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "services" / "frontend"
 
 
 def write_runtime_config() -> None:

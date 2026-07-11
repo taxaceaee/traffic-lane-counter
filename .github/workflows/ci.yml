@@ -20,14 +20,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
 
       - name: Compile Python sources
-        run: python -m compileall tf_api tf_db tf_worker tf_core tf_common
+        run: python -m compileall packages/tf_api packages/tf_db packages/tf_worker packages/tf_core packages/tf_common scripts
 
       - name: Lint active repository
-        run: python -m ruff check .
+        run: python -m ruff check packages scripts tests
 
       - name: Run tests
         env:
           JWT_SECRET: ci-test-secret
+          PYTHONPATH: packages
         run: python -m pytest tests -q --timeout=30 --timeout-method=thread

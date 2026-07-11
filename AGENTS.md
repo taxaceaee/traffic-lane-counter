@@ -1,67 +1,79 @@
-# AGENTS.md - Trạng thái hiện tại của `vehicle_counting` (cập nhật 2026-07-11)
+# AGENTS.md - TrafficFlow monorepo (cập nhật 2026-07-11)
 
-## Runtime active
+## Layout
 
-| Thành phần | Đường dẫn chính | Ghi chú |
+```
+packages/          # Python libs (import names unchanged)
+  tf_api/          # FastAPI backend code
+  tf_worker/       # inference pipeline / worker
+  tf_core/         # detection, tracking, lanes, occupancy
+  tf_common/       # logging, redis, yt utils, metrics
+  tf_db/           # ORM, repositories, session
+
+services/          # Deploy units (one folder = one deployable)
+  backend/         # Dockerfile + README (API)
+  frontend/        # SPA static + Dockerfile
+  model/           # Dockerfile + README (YOLO worker)
+  database/        # Alembic migrations + README
+
+deploy/            # Full-stack compose + nginx
+configs/           # cameras, lanes, zones, models, settings
+weights/           # model weights (.pt gitignored)
+scripts/           # seed, serve_frontend, import_jsonl, run_occupancy
+tests/
+```
+
+## Runtime mapping
+
+| Deploy unit | Code | Notes |
 |---|---|---|
-| Backend API | `tf_api/` | FastAPI, auth, jobs, live, ws, settings |
-| AI core | `tf_core/` | detection, tracking, lane/counting, occupancy |
-| Worker | `tf_worker/` | pipeline, storage worker, video IO |
-| Database layer | `tf_db/` | models, repositories, session |
-| Shared runtime | `tf_common/` | logging, alerts, safe path, yt utils |
-| Frontend SPA | `frontend/` | `index.html`, `js/core.js`, `js/pages/*.js` |
-| Deploy assets | `deploy/` | tách theo `api/`, `frontend/`, `worker/`, `proxy/`, `stack/` |
+| Backend API | `packages/tf_api` | FastAPI, auth, jobs, live, ws, settings |
+| Model worker | `packages/tf_worker` + `tf_core` | detection, tracking, counting |
+| Database | `packages/tf_db` + `services/database` | models + Alembic |
+| Frontend SPA | `services/frontend` | `index.html`, `js/`, `pages/` |
+| Shared | `packages/tf_common` | logging, alerts, yt utils |
 
-## Những nguyên tắc hiện tại
+## Principles
 
-1. Frontend không còn bundle `frontend/js/app.js`; chỉ dùng:
-   - `frontend/js/core.js`
-   - `frontend/js/pages/*.js`
-2. Backend có thể chạy độc lập với frontend bằng `SERVE_FRONTEND=false`.
-3. Settings defaults/reset do backend làm nguồn thật duy nhất:
-   - `GET /api/settings`
-   - `GET /api/settings/defaults`
-   - `POST /api/settings/reset`
-4. Camera YouTube live chỉ dùng đúng 3 source đã khóa trong `tf_api/api/routes_cameras.py`.
-5. Live detection always-on (mặc định):
-   - `AUTO_START_LIVE_STREAMS=true` (xem `.env.example`) — API boot auto-start
-     mọi camera YAML, supervisor restart mỗi 30s.
-   - Không cần mở Live Monitoring để Dashboard/Events có data.
-   - `GET /live/status` — fleet overview (running / always_on / fps).
-   - Tắt: `AUTO_START_LIVE_STREAMS=false` (chỉ start khi có MJPEG viewer).
+1. Frontend only: `services/frontend/js/core.js` + `pages/*.js` (no `app.js` bundle).
+2. Backend can run without SPA: `SERVE_FRONTEND=false`.
+3. Settings defaults/reset: backend is source of truth (`/api/settings*`).
+4. Camera YouTube live: locked sources in `tf_api` cameras routes.
+5. Live always-on: `AUTO_START_LIVE_STREAMS=true` (see `.env.example`).
 
 ## Local entrypoints
 
 ```bash
-# API local
+# API + optional SPA
 ./start.sh
 
-# Frontend local
+# Frontend only
 API_BASE_URL=http://localhost:8000 .venv/bin/python -m scripts.serve_frontend
 
-# Worker local
+# Offline worker
 .venv/bin/python -m tf_worker.worker
 
-# Full stack local
-docker compose -f deploy/stack/docker-compose.yml up --build
+# Full stack
+docker compose -f deploy/docker-compose.yml up --build
 ```
 
-## Kiểm tra nhanh sau mỗi cụm thay đổi
+## Checks after changes
 
 ```bash
-.venv/bin/python -m compileall tf_api tf_common tf_core tf_db tf_worker scripts tests
+export PYTHONPATH=packages
+.venv/bin/python -m compileall packages scripts tests
 .venv/bin/python -m pytest tests -q
 ```
 
-## Utility scripts còn giữ lại
+## Scripts
 
-- `scripts/serve_frontend.py` - SPA local server
-- `scripts/seed_db.py` - seed dữ liệu demo
-- `scripts/import_jsonl.py` - import output JSONL vào DB
-- `scripts/run_occupancy.py` - chạy 1 job pipeline offline
+- `scripts/serve_frontend.py` — SPA local server
+- `scripts/seed_db.py` — demo data
+- `scripts/import_jsonl.py` — import JSONL → DB
+- `scripts/run_occupancy.py` — offline pipeline job
 
-## Ghi chú dọn repo
+## Notes
 
-- Không giữ DETRAC/benchmark stack trong runtime tree.
-- Không commit audit generated / `test-reports/`.
-- Weight mặc định nằm trong `weights/`, không để file model rơi ở repo root.
+- Do not keep DETRAC/benchmark stacks.
+- Weights in `weights/` only (not repo root).
+- Import names stay `tf_api`, `tf_worker`, … — only filesystem layout changed.

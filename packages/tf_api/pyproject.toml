@@ -1,0 +1,21 @@
+[project]
+name = "tf-api"
+version = "1.0.0"
+description = "TrafficFlow REST API server: FastAPI + WebSocket + auth + monitoring"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110,<0.111",
+    "uvicorn[standard]>=0.29,<0.31",
+    "python-multipart",
+    "httpx>=0.27,<0.28",
+    "anyio>=4.4,<4.10",
+    "slowapi",
+    "python-jose[cryptography]",
+    "passlib[bcrypt]",
+    "bcrypt>=4.0,<4.1",
+    "alembic",
+    "prometheus-client",
+]
+
+[tool.setuptools.packages.find]
+include = ["tf_api*"]

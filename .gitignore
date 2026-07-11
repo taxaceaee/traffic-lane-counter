@@ -1,6 +1,9 @@
 # Secrets
 .env
 .env.*
+!.env.example
+!deploy/.env.example
+!services/**/.env.example
 *.key
 *.pem
 
@@ -10,9 +13,9 @@
 *.zip
 data/
 datasets/
-outputs/
-logs/
-storage/
+/outputs/
+/logs/
+/storage/
 test-reports/
 
 # Model weights (keep weights/.gitkeep)

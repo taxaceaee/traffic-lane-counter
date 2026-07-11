@@ -58,12 +58,16 @@ fi
 
 source .venv/bin/activate
 
+# Python packages live under packages/ (services/ is deploy boundary only).
+export PYTHONPATH="${PWD}/packages${PYTHONPATH:+:$PYTHONPATH}"
+
 export APP_ENV="${APP_ENV:-development}"
 export SERVE_FRONTEND
 # Local runtime data belongs under the user-writable data directory. Docker
 # overrides this with its named /app/storage volume.
 export STORAGE_ROOT="${STORAGE_ROOT:-data/storage}"
 export OUTPUT_DIR="${OUTPUT_DIR:-data/outputs}"
+export FRONTEND_DIR="${FRONTEND_DIR:-${PWD}/services/frontend}"
 
 # YouTube now uses JS challenges and Proof-of-Origin tokens.  Keep the
 # provider local to this development process so `npm run dev` is self-contained

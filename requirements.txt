@@ -14,7 +14,6 @@ redis>=5.0
 alembic>=1.13,<2.0
 httpx>=0.27,<0.28
 anyio>=4.4,<4.10
-defusedxml
 passlib[bcrypt]
 bcrypt>=4.0,<4.1
 prometheus-client

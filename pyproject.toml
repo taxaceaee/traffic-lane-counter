@@ -18,7 +18,6 @@ dependencies = [
     "psycopg2-binary",
     "redis>=5.0",
     "alembic>=1.13,<2.0",
-    "defusedxml",
     "python-jose[cryptography]",
     "httpx>=0.27,<0.28",
     "anyio>=4.4,<4.10",
@@ -31,7 +30,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["tf_core*", "tf_common*", "tf_db*", "tf_api*", "tf_worker*", "scripts*"]
+where = ["packages"]
+include = ["tf_core*", "tf_common*", "tf_db*", "tf_api*", "tf_worker*"]
 
 [project.optional-dependencies]
 dev = [
@@ -52,7 +52,7 @@ seed-db = "scripts.seed_db:main"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = ["legacy"]
+src = ["packages", "scripts", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S", "ASYNC"]
@@ -67,7 +67,12 @@ ignore = ["E501", "B008"]
 python_version = "3.10"
 warn_unused_ignores = true
 explicit_package_bases = true
+mypy_path = "packages"
 
 [[tool.mypy.overrides]]
 module = ["ultralytics.*", "cv2", "torch.*"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = ["packages", "."]
+testpaths = ["tests"]

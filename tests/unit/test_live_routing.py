@@ -10,7 +10,7 @@ def test_nginx_routes_live_api_before_frontend_fallback():
 
 
 def test_live_redis_messages_use_frontend_event_envelopes():
-    source = Path("tf_api/api/routes_live.py").read_text(encoding="utf-8")
+    source = Path("packages/tf_api/api/routes_live.py").read_text(encoding="utf-8")
     assert '"type": "occupancy_update"' in source
     assert '"type": "count_event"' in source
     assert '"type": "lane_change_event"' in source

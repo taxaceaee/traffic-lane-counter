@@ -5,10 +5,13 @@ datasets/
 outputs/
 logs/
 uploads/
+data/
 *.onnx
 *.engine
 .git
-trafficflow.db
 *.sqlite3
 .env
-deploy/stack/.env
+deploy/.env
+test-reports/
+.pytest_cache/
+**/.ruff_cache/

@@ -63,27 +63,27 @@ lanes: []
 
 def test_no_legacy_benchmark_packages():
     root = Path(".")
-    assert not (root / "tf_worker" / "evaluation").exists()
-    assert not (root / "tf_worker" / "benchmark").exists()
+    assert not (root / "packages" / "tf_worker" / "evaluation").exists()
+    assert not (root / "packages" / "tf_worker" / "benchmark").exists()
     assert not (root / "scripts" / "run_benchmark.py").exists()
     assert not (root / "scripts" / "benchmark_model.py").exists()
 
 
 def test_live_module_has_current_preview_path():
-    src = Path("tf_api/api/routes_live.py").read_text(encoding="utf-8")
+    src = Path("packages/tf_api/api/routes_live.py").read_text(encoding="utf-8")
     assert "_encode_work_q" not in src
     assert "idle_for" in src
     assert 'stream_meta["occupancy"]' in src
     assert "Queue(maxsize=1)" in src
 
-    js = Path("frontend/js/pages/live.js").read_text(encoding="utf-8")
+    js = Path("services/frontend/js/pages/live.js").read_text(encoding="utf-8")
     assert "_stopMJPEGStream" in js
     assert "_isLiveMessageForCamera" in js
     assert "_liveLoadGeneration" in js
 
 
 def test_frontend_asset_cache_busters_are_unified():
-    index = Path("frontend/index.html").read_text(encoding="utf-8")
+    index = Path("services/frontend/index.html").read_text(encoding="utf-8")
     stamps = sorted(set(
         line.split("?t=")[1].split('"')[0]
         for line in index.splitlines()

@@ -5,12 +5,12 @@
   "description": "TrafficFlow — Vision-based Vehicle Counting System",
   "scripts": {
     "dev": "./start.sh",
-    "api": ".venv/bin/python -m uvicorn tf_api.main:app --host 0.0.0.0 --port 8000",
-    "worker": ".venv/bin/python -m tf_worker.worker",
+    "backend": ".venv/bin/python -m uvicorn tf_api.main:app --host 0.0.0.0 --port 8000",
+    "model": ".venv/bin/python -m tf_worker.worker",
     "frontend": ".venv/bin/python -m scripts.serve_frontend",
-    "stack:up": "docker compose -f deploy/stack/docker-compose.yml up --build",
-    "lint": ".venv/bin/python -m ruff check .",
-    "lint:fix": ".venv/bin/python -m ruff check --fix .",
+    "stack:up": "docker compose -f deploy/docker-compose.yml up --build",
+    "lint": ".venv/bin/python -m ruff check packages scripts tests",
+    "lint:fix": ".venv/bin/python -m ruff check --fix packages scripts tests",
     "seed": ".venv/bin/python scripts/seed_db.py",
     "pipeline": ".venv/bin/python -m scripts.run_occupancy",
     "clean": "find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -type f -name '*.pyc' -delete; rm -rf test-reports .pytest_cache"
