@@ -33,6 +33,7 @@ from tf_api.api.routes_auth import decode_access_token, get_current_user, requir
 from tf_api.services.settings_service import get_detection_defaults, get_max_streams
 from tf_common.safe_path import validate_identifier
 from tf_common.live_errors import diagnose_stream_error
+from tf_common.viz_colors import build_lane_color_map, color_for_lane, color_for_track
 from tf_core.config.loader import normalize_camera_config
 from tf_core.detection_core import DetectionCore
 from tf_core.roi import CropROI
@@ -842,6 +843,7 @@ def _start_pipeline(
 
 def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.ndarray:
     canvas = frame  # annotate in-place — saves ~6 MB copy per frame
+    lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
 
     crossings = det.get("crossings", [])
     for lane in lanes:
@@ -859,13 +861,14 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
     for lane_data in lanes:
+        lane_color = color_for_lane(lane_data["id"], lane_colors)
         pts = np.array(lane_data["points"], dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(canvas, [pts], isClosed=True, color=(255, 220, 0), thickness=2)
+        cv2.polylines(canvas, [pts], isClosed=True, color=lane_color, thickness=2)
         first_pt = lane_data["points"][0]
         cv2.putText(canvas, lane_data["id"], (int(first_pt[0]) + 5, int(first_pt[1]) - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(canvas, lane_data["id"], (int(first_pt[0]) + 5, int(first_pt[1]) - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 220, 0), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, lane_color, 1)
 
     ftracks = det.get("frame_tracks", [])
     for t in ftracks:
@@ -873,15 +876,22 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
         if not bbox or len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox]
-        counted = t.get("is_counted_in_occupancy", False)
-        box_color = (0, 255, 127) if counted else (100, 100, 100)
+        # Same lane → same box color (stable preferred, raw as fallback).
+        box_color = color_for_track(
+            lane_colors,
+            stable_lane=t.get("stable_lane"),
+            raw_lane=t.get("raw_lane"),
+        )
+        stable = t.get("stable_lane") or t.get("raw_lane") or "none"
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
         cx = (x1 + x2) // 2
-        cv2.circle(canvas, (cx, y2), 5, (0, 0, 255), -1)
-        stable = t.get("stable_lane") or "none"
+        cv2.circle(canvas, (cx, y2), 5, box_color, -1)
         label = f"#{t['track_id']} {t['class_name']} ({stable})"
+        # Dark outline + lane-colored label keeps text readable on busy video.
         cv2.putText(canvas, label, (x1 + 3, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2)
+        cv2.putText(canvas, label, (x1 + 3, y1 - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
 
     occupancy = det.get("occupancy", {})
     if occupancy:
@@ -895,10 +905,11 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
         cv2.line(canvas, (25, 42), (15 + panel_w - 10, 42), (80, 80, 80), 1)
         y = 62
         for lane_id in sorted(occupancy.keys()):
+            lane_color = color_for_lane(lane_id, lane_colors)
             cv2.putText(canvas, f"{lane_id}:", (25, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, lane_color, 1)
             cv2.putText(canvas, str(occupancy[lane_id]), (15 + panel_w - 40, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 127), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, lane_color, 2)
             y += 25
 
     for cx in crossings[:1]:

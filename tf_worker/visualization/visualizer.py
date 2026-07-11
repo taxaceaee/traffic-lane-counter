@@ -3,6 +3,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from tf_common.viz_colors import build_lane_color_map, color_for_lane, color_for_track
 from tf_core.lanes.lane_config import Lane
 from tf_core.occupancy.lane_state_manager import LaneStateManager
 
@@ -22,6 +23,7 @@ class Visualizer:
     def __init__(self, config: dict):
         self.config = config
         self.lanes = [Lane(ln["id"], ln["points"]) for ln in config.get("lanes", [])]
+        self._lane_colors = build_lane_color_map([ln.id for ln in self.lanes])
 
     def _draw_semi_transparent_rect(self, overlay: np.ndarray, img: np.ndarray, pt1: tuple[int, int], pt2: tuple[int, int], color: tuple[int, int, int], alpha: float = 0.5):
         """Draws a filled rectangle with transparency onto a pre-created overlay."""
@@ -158,17 +160,17 @@ class Visualizer:
         if line_counter is not None:
             self._draw_counting_lines(canvas, overlay, line_counter, flashed_line_ids)
 
-        # 1. Draw Lane Polygons (Cyan/Blue-Green)
+        # 1. Draw Lane Polygons (same color family as vehicle boxes in that lane)
         for lane in self.lanes:
+            lane_color = color_for_lane(lane.id, self._lane_colors)
             pts = np.array(lane.polygon, dtype=np.int32).reshape((-1, 1, 2))
-            cv2.polylines(canvas, [pts], isClosed=True, color=(255, 220, 0), thickness=2)
+            cv2.polylines(canvas, [pts], isClosed=True, color=lane_color, thickness=2)
             first_pt = lane.points[0]
             label_pos = (int(first_pt[0]) + 5, int(first_pt[1]) - 5)
             cv2.putText(canvas, lane.id, label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, lane.id, label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 220, 0), 1)
+            cv2.putText(canvas, lane.id, label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6, lane_color, 1)
 
-        # 2. Draw Active Bounding Boxes & Labels
-        min_age = state_manager.min_track_age_frames
+        # 2. Draw Active Bounding Boxes & Labels (same color per lane)
         for tid, state in state_manager.track_states.items():
             if state.last_seen_frame != current_frame_idx:
                 continue
@@ -178,16 +180,24 @@ class Visualizer:
             xmin, ymin, xmax, ymax = state.bbox
             x1, y1, x2, y2 = int(xmin), int(ymin), int(xmax), int(ymax)
 
-            is_counted = state.is_counted(current_frame_idx, min_age)
-            box_color = (0, 255, 127) if is_counted else (100, 100, 100)
+            raw_lane = (
+                state.raw_history[-1]
+                if getattr(state, "raw_history", None)
+                else None
+            )
+            box_color = color_for_track(
+                self._lane_colors,
+                stable_lane=state.stable_lane,
+                raw_lane=raw_lane,
+            )
 
             cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
 
             cx = int((xmin + xmax) / 2)
             cy = int(ymax)
-            cv2.circle(canvas, (cx, cy), 5, (0, 0, 255), -1)
+            cv2.circle(canvas, (cx, cy), 5, box_color, -1)
 
-            stable_lbl = state.stable_lane if state.stable_lane else "none"
+            stable_lbl = state.stable_lane or raw_lane or "none"
             label_text = f"#{tid} {state.class_name} ({stable_lbl})"
 
             (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
@@ -197,7 +207,7 @@ class Visualizer:
             tx2 = min(x1 + tw + 6, canvas.shape[1])
 
             self._draw_semi_transparent_rect(overlay, canvas, (tx1, ty1), (tx2, ty2), (30, 30, 30), alpha=0.7)
-            cv2.putText(canvas, label_text, (tx1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            cv2.putText(canvas, label_text, (tx1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
 
         # 3. Draw On-Screen Occupancy Table
         panel_w = 200
@@ -211,8 +221,9 @@ class Visualizer:
         y_pos = 62
         for lane_id in sorted(occupancy.keys()):
             count = occupancy[lane_id]
-            cv2.putText(canvas, f"{lane_id}:", (25, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
-            cv2.putText(canvas, str(count), (15 + panel_w - 40, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 127), 2)
+            lane_color = color_for_lane(lane_id, self._lane_colors)
+            cv2.putText(canvas, f"{lane_id}:", (25, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, lane_color, 1)
+            cv2.putText(canvas, str(count), (15 + panel_w - 40, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, lane_color, 2)
             y_pos += 25
 
         # 4. Apply overlay once and draw COUNTS panel
