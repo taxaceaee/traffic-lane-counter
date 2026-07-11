@@ -55,7 +55,11 @@ router = APIRouter(tags=["live"])
 security = HTTPBearer(auto_error=False)
 
 _MAX_STREAMS = 16
-_STREAM_CLEANUP_INTERVAL = 300  # 5 min
+# How often to scan for idle pipelines (no MJPEG viewers).
+_STREAM_CLEANUP_INTERVAL = 10  # seconds
+# Tear down pipelines quickly after the browser switches cameras so YOLO/encode
+# on the previous camera no longer steal GPU/CPU from the active stream.
+_STREAM_IDLE_TTL_SEC = 20.0
 _MAX_RECONNECT_ATTEMPTS = 10
 _RECONNECT_BACKOFF_BASE = 1.0
 _RECONNECT_BACKOFF_MAX = 60.0
@@ -98,35 +102,23 @@ def _restore_original_bboxes(det: dict[str, Any], roi: CropROI | None, width: in
                 item["bbox"] = roi.to_original(item["bbox"], width, height)
 
 
-def _cleanup_stale_streams():
+def _cleanup_stale_streams(force: bool = False) -> None:
     """Remove streams that have no active MJPEG consumers."""
     global _last_cleanup
     now = time.monotonic()
-    if now - _last_cleanup < _STREAM_CLEANUP_INTERVAL:
+    if not force and now - _last_cleanup < _STREAM_CLEANUP_INTERVAL:
         return
     _last_cleanup = now
     with _lock:
-        dead = [cid for cid, (_core, _q, meta, sw, sess, stop_ev) in _streams.items()
-                if meta.get("connections", 0) <= 0
-                and now - meta.get("last_access", 0) > 120]
-        for cid in dead:
-            _core, _q, _meta, sw, sess, stop_ev = _streams.pop(cid)
-            _last_snapshots.pop(cid, None)
-            stop_ev.set()  # signal capture thread to stop
-            for thread in _meta.get("threads", []):
-                if thread is not threading.current_thread():
-                    thread.join(timeout=5.0)
-            if sw is not None:
-                try:
-                    sw.stop(timeout=3.0)
-                except Exception:
-                    logger.warning("Failed to stop StorageWorker for %s", cid, exc_info=True)
-            if sess is not None:
-                try:
-                    sess.close()
-                except Exception:
-                    logger.debug("Failed to close stale stream session for %s", cid, exc_info=True)
-            logger.info("Cleaned up stale stream: %s", cid)
+        dead = [
+            cid
+            for cid, (_core, _q, meta, sw, sess, stop_ev) in _streams.items()
+            if meta.get("connections", 0) <= 0
+            and now - meta.get("last_access", 0) > _STREAM_IDLE_TTL_SEC
+        ]
+    for cid in dead:
+        if _cleanup_stream(cid):
+            logger.info("Cleaned up idle stream (no viewers): %s", cid)
 
 
 def _load_camera_config(camera_id: str) -> dict[str, Any] | None:
@@ -433,12 +425,15 @@ def _start_pipeline(
         publisher=publisher,
     )
 
-    annotated_queue: Queue = Queue(maxsize=2)
+    # Latest-frame only: size 1 keeps latency low and avoids backlog stutter.
+    annotated_queue: Queue = Queue(maxsize=1)
     preview_defaults = get_preview_defaults()
-    jpeg_quality = int(preview_defaults.get("jpeg_quality", 85))
-    jpeg_quality = max(60, min(95, jpeg_quality))
-    preview_target_fps = float(preview_defaults.get("target_fps", 25) or 25)
-    preview_target_fps = max(5.0, min(60.0, preview_target_fps))
+    # Full source resolution is preserved; quality is tuned for encode speed so
+    # Output FPS stays close to the preview target on laptop GPUs.
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 72))
+    jpeg_quality = max(55, min(90, jpeg_quality))
+    preview_target_fps = float(preview_defaults.get("target_fps", 20) or 20)
+    preview_target_fps = max(8.0, min(30.0, preview_target_fps))
     stream_meta: dict[str, Any] = {
         "source_fps": float(cfg.get("fps", 25.0) or 25.0),
         "preview_fps_target": preview_target_fps,
@@ -448,66 +443,72 @@ def _start_pipeline(
         "preserve_source_resolution": bool(
             preview_defaults.get("preserve_source_resolution", True)
         ),
+        "connections": 0,
+        "last_access": time.monotonic(),
     }
     stop_event = threading.Event()
     from tf_common.monitoring.live_metrics import record_stream_state
     record_stream_state(camera_id, "starting")
 
-    # ── Full-resolution paced preview ─────────────────────────────────────
-    # Detection runs as fast as possible and never waits on JPEG encode.
-    # A dedicated thread samples the *latest* full-res annotated frame at a
-    # stable preview_fps so the browser sees smooth motion without downscale.
+    # ── Full-resolution latest-frame preview encoder ─────────────────────
+    # Capture never blocks on JPEG. Encoder takes ownership of the newest
+    # frame reference (single copy on publish) and encodes as fast as possible
+    # up to preview_target_fps — no forced sleep that starves Output FPS.
     _preview_lock = threading.Lock()
     _preview_frame: np.ndarray | None = None
     _preview_seq = 0
 
     def _publish_preview_frame(annotated: np.ndarray) -> None:
-        """Store latest full-res annotated frame for the paced encoder."""
+        """Store a full-res copy of the newest annotated frame for encode."""
         nonlocal _preview_frame, _preview_seq
-        # Preserve source resolution: never resize before encode.
+        # New array each time so the encode thread can hold the previous ref
+        # without a second copy, and without racing capture in-place draws.
+        frame_copy = annotated.copy()
         with _preview_lock:
-            if (
-                _preview_frame is None
-                or _preview_frame.shape != annotated.shape
-                or _preview_frame.dtype != annotated.dtype
-            ):
-                _preview_frame = annotated.copy()
-            else:
-                np.copyto(_preview_frame, annotated)
+            _preview_frame = frame_copy
             _preview_seq += 1
 
     def _encode_worker():
-        """Pace JPEG encode of the newest full-res frame for smooth MJPEG."""
+        """Encode newest full-res frame; drop intermediate frames under load."""
         nonlocal _preview_frame, _preview_seq
         last_seq = -1
-        interval = 1.0 / preview_target_fps
+        min_interval = 1.0 / preview_target_fps
+        last_emit = 0.0
         while not stop_event.is_set():
-            t0 = time.monotonic()
-            frame_copy: np.ndarray | None = None
+            frame_ref: np.ndarray | None = None
             with _preview_lock:
                 if _preview_frame is not None and _preview_seq != last_seq:
                     last_seq = _preview_seq
-                    frame_copy = _preview_frame.copy()
-            if frame_copy is not None:
+                    frame_ref = _preview_frame
+            if frame_ref is None:
+                time.sleep(0.005)
+                continue
+
+            # Cap emit rate without sleeping the full interval after a slow encode.
+            now = time.monotonic()
+            wait = min_interval - (now - last_emit)
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                ok, jpeg = cv2.imencode(
+                    ".jpg",
+                    frame_ref,
+                    [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
+                )
+                if not ok:
+                    continue
+                jpeg_bytes = jpeg.tobytes()
                 try:
-                    ok, jpeg = cv2.imencode(
-                        ".jpg",
-                        frame_copy,
-                        [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
-                    )
-                    if ok:
-                        jpeg_bytes = jpeg.tobytes()
-                        try:
-                            annotated_queue.put_nowait(jpeg_bytes)
-                        except Full:
-                            with suppress(Empty):
-                                annotated_queue.get_nowait()
-                            with suppress(Full):
-                                annotated_queue.put_nowait(jpeg_bytes)
-                except (ValueError, cv2.error):
-                    logger.debug("Preview encode failed for %s", camera_id, exc_info=True)
-            elapsed = time.monotonic() - t0
-            time.sleep(max(0.0, interval - elapsed))
+                    annotated_queue.put_nowait(jpeg_bytes)
+                except Full:
+                    with suppress(Empty):
+                        annotated_queue.get_nowait()
+                    with suppress(Full):
+                        annotated_queue.put_nowait(jpeg_bytes)
+                last_emit = time.monotonic()
+            except (ValueError, cv2.error):
+                logger.debug("Preview encode failed for %s", camera_id, exc_info=True)
 
     encode_thread = threading.Thread(
         target=_encode_worker,
@@ -659,6 +660,19 @@ def _start_pipeline(
                         time.sleep(0.1)
                         continue
                     read_failures = 0
+
+                    # If nobody is watching this camera, drain the source buffer
+                    # lightly and skip YOLO/encode so other cameras stay smooth.
+                    # Grace 2s after last_access avoids a race where the capture
+                    # thread starts before the MJPEG handler increments connections.
+                    viewers = int(stream_meta.get("connections", 0) or 0)
+                    last_access = float(stream_meta.get("last_access", 0.0) or 0.0)
+                    idle_for = time.monotonic() - last_access
+                    if viewers <= 0 and idle_for > 2.0:
+                        _update_snapshot(camera_id, frame)
+                        time.sleep(0.03)
+                        frame_idx += 1
+                        continue
 
                     _update_snapshot(camera_id, frame)
 

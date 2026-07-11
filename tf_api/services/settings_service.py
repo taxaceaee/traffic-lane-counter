@@ -32,9 +32,10 @@ _DEFAULTS: dict[str, Any] = {
         "roi_padding": 80,
     },
     # Live preview is always full source resolution; pace for smoothness.
+    # jpeg_quality/target_fps balance encode CPU vs Output FPS on laptop GPUs.
     "preview": {
-        "jpeg_quality": 85,
-        "target_fps": 25,
+        "jpeg_quality": 72,
+        "target_fps": 20,
         "preserve_source_resolution": True,
     },
     "storage": {

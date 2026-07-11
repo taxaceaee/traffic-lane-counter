@@ -13,8 +13,8 @@
     "roi_padding": 80
   },
   "preview": {
-    "jpeg_quality": 85,
-    "target_fps": 25,
+    "jpeg_quality": 72,
+    "target_fps": 20,
     "preserve_source_resolution": true
   },
   "storage": {

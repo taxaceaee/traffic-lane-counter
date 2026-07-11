@@ -226,6 +226,8 @@ async function loadLiveCameraData() {
     // Hard-reset side panels immediately so previous camera data never lingers.
     _liveLaneIds = [];
     _resetLivePanelsForCamera();
+    // Abort previous MJPEG immediately so the old camera frees encode/GPU.
+    _stopMJPEGStream();
     // Fresh camera view starts at 1x so pan offset from previous cam is not kept.
     liveZoomReset();
 
@@ -476,9 +478,35 @@ let _streamHealthTimer = null;
 let _mjpegCameraId = null;
 let _mjpegStreamGeneration = 0;
 
+/**
+ * Abort any open MJPEG <img> request so the previous camera stops consuming
+ * server encode slots and the browser drops the old multipart connection.
+ */
+function _stopMJPEGStream() {
+    clearTimeout(_mjpegRetryTimer);
+    _mjpegRetryTimer = null;
+    const img = document.querySelector('#live-mjpeg-img');
+    if (img) {
+        img.onload = null;
+        img.onerror = null;
+        // Empty src aborts the in-flight multipart stream in Chromium.
+        try { img.removeAttribute('src'); } catch (_) { /* ignore */ }
+        img.src = '';
+        img.remove();
+    }
+    const snap = document.querySelector('#live-snapshot-img');
+    if (snap && snap.dataset.objectUrl) {
+        try { URL.revokeObjectURL(snap.dataset.objectUrl); } catch (_) { /* ignore */ }
+        delete snap.dataset.objectUrl;
+    }
+}
+
 async function _startMJPEGStream(cameraId) {
     const container = document.getElementById('live-video-container');
     if (!container) return;
+
+    // Tear down previous camera stream before starting a new one.
+    _stopMJPEGStream();
     _mjpegCameraId = cameraId;
     const streamGeneration = ++_mjpegStreamGeneration;
     clearTimeout(_mjpegRetryTimer);
@@ -501,7 +529,11 @@ async function _startMJPEGStream(cameraId) {
         return;
     }
     if (_mjpegCameraId !== cameraId || streamGeneration !== _mjpegStreamGeneration) return;
-    const liveUrl = BASE_URL + '/live/' + encodeURIComponent(cameraId) + '/stream.mjpg?stream_token=' + encodeURIComponent(ticket);
+    // Cache-bust so the browser never reuses a stalled multipart response.
+    const liveUrl = BASE_URL
+        + '/live/' + encodeURIComponent(cameraId)
+        + '/stream.mjpg?stream_token=' + encodeURIComponent(ticket)
+        + '&t=' + Date.now();
 
     // Always create a fresh image node.  Reusing the snapshot <img> after it
     // has decoded a Blob URL is unreliable in Chrome: the multipart MJPEG
