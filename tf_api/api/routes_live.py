@@ -258,6 +258,61 @@ def _cfg_to_pipeline_dict(cfg: dict[str, Any], camera_cfg_path: Path | None = No
     }
 
 
+def _build_live_runtime(
+    camera_id: str,
+    cfg: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], CropROI | None, int, int]:
+    """Build the in-memory lane/ROI runtime from the current YAML files."""
+    pipeline_cfg = _cfg_to_pipeline_dict(
+        cfg,
+        camera_cfg_path=Path(f"configs/cameras/{camera_id}.yaml"),
+    )
+    lanes = pipeline_cfg["lanes"]
+    roi: CropROI | None = None
+    roi_crop_enabled = pipeline_cfg.get("detector", {}).get("roi_crop", True)
+    zone_polygons = _load_zones(cfg) if roi_crop_enabled else []
+
+    # Keep original dimensions before transform_config changes frame_size to
+    # crop dimensions. Zones are valid even when no lanes are configured.
+    original_frame_w = pipeline_cfg["frame_size"]["width"]
+    original_frame_h = pipeline_cfg["frame_size"]["height"]
+    if roi_crop_enabled and (lanes or zone_polygons):
+        try:
+            roi_padding = int(pipeline_cfg.get("roi_padding", 50))
+            roi = CropROI(
+                lanes,
+                pipeline_cfg["frame_size"],
+                padding=roi_padding,
+                zone_polygons=zone_polygons,
+            )
+            pipeline_cfg = roi.transform_config(pipeline_cfg)
+            pipeline_cfg.setdefault("detector", {})
+            pipeline_cfg["detector"]["imgsz"] = roi.suggested_imgsz()
+            logger.info(
+                "ROI crop: %s (area ratio: %.2f%%), imgsz=%d",
+                roi,
+                roi.area_ratio * 100,
+                pipeline_cfg["detector"]["imgsz"],
+            )
+        except Exception:
+            logger.warning("Failed to init CropROI — full frame", exc_info=True)
+            roi = None
+
+    return pipeline_cfg, lanes, roi, original_frame_w, original_frame_h
+
+
+def _request_stream_reload(camera_id: str) -> bool:
+    """Request a config-only hot reload without dropping the video reader."""
+    with _lock:
+        stream = _streams.get(camera_id)
+        if stream is None:
+            return False
+        meta = stream[2]
+        meta["reload_requested"] = True
+        meta["reload_requested_at"] = time.monotonic()
+        return True
+
+
 def _start_pipeline(
     camera_id: str,
     cfg: dict[str, Any],
@@ -268,51 +323,12 @@ def _start_pipeline(
     -------
     tuple of (DetectionCore, annotated_queue, StorageWorker, db_session, stop_event)
     """
-    pipeline_cfg = _cfg_to_pipeline_dict(cfg, camera_cfg_path=Path(f"configs/cameras/{camera_id}.yaml"))
-    lanes = pipeline_cfg["lanes"]
+    pipeline_cfg, lanes, roi, _original_frame_w, _original_frame_h = _build_live_runtime(
+        camera_id,
+        cfg,
+    )
     source = cfg.get("source") or cfg.get("server", {}).get("source", "")
     source_type = cfg.get("source_type") or cfg.get("input", {}).get("source_type", "video")
-
-    # ROI crop: compute crop region from detection zones (preferred) or
-    # lane polygons (fallback). Detection runs only on the cropped area:
-    # smaller → faster, fewer false positives.
-    roi = None
-    roi_crop_enabled = pipeline_cfg.get("detector", {}).get("roi_crop", True)
-    if roi_crop_enabled and pipeline_cfg.get("lanes"):
-        roi_padding = int(pipeline_cfg.get("roi_padding", 50))
-        try:
-            # Load zone config to see if user-defined zones exist
-            zone_polygons = _load_zones(cfg)
-
-            # Save original frame size BEFORE transform_config overwrites it
-            _original_frame_w = pipeline_cfg["frame_size"]["width"]
-            _original_frame_h = pipeline_cfg["frame_size"]["height"]
-
-            roi = CropROI(
-                pipeline_cfg["lanes"],
-                pipeline_cfg["frame_size"],
-                padding=roi_padding,
-                zone_polygons=zone_polygons,  # None → falls back to lane polygons
-            )
-            pipeline_cfg = roi.transform_config(pipeline_cfg)
-            # Override imgsz to match crop size — avoids wasteful
-            # up-scaling of small crops and lossy down-scaling of
-            # large crops.  The image is already at a good resolution
-            # for the ROI.
-            pipeline_cfg.setdefault("detector", {})
-            pipeline_cfg["detector"]["imgsz"] = roi.suggested_imgsz()
-            logger.info(
-                "ROI crop: %s (area ratio: %.2f%%), imgsz=%d",
-                roi, roi.area_ratio * 100,
-                pipeline_cfg["detector"]["imgsz"],
-            )
-        except Exception:
-            logger.warning("Failed to init CropROI — full frame", exc_info=True)
-            roi = None
-    else:
-        # No ROI crop — use the frame size from config directly
-        _original_frame_w = pipeline_cfg["frame_size"]["width"]
-        _original_frame_h = pipeline_cfg["frame_size"]["height"]
 
     core = DetectionCore(pipeline_cfg)
     core.start()
@@ -392,6 +408,7 @@ def _start_pipeline(
     _last_published_occupancy: dict[str, int] | None = None
 
     def _capture_loop():
+        nonlocal core, lanes, roi, _original_frame_w, _original_frame_h
         nonlocal _last_det, _last_published_occupancy
         attempt = 0
         while not stop_event.is_set():
@@ -449,6 +466,37 @@ def _start_pipeline(
             read_failures = 0
             try:
                 while not stop_event.is_set():
+                    if stream_meta.pop("reload_requested", False):
+                        try:
+                            new_cfg = _load_camera_config(camera_id)
+                            if new_cfg is None:
+                                raise ValueError(f"Camera config disappeared: {camera_id}")
+                            (
+                                new_pipeline_cfg,
+                                new_lanes,
+                                new_roi,
+                                new_frame_w,
+                                new_frame_h,
+                            ) = _build_live_runtime(camera_id, new_cfg)
+                            new_core = DetectionCore(new_pipeline_cfg)
+                            new_core.start()
+
+                            # Swap only inference/config state. The existing
+                            # reader keeps delivering frames, so a Lane/Zone
+                            # save cannot make the browser lose its video.
+                            core = new_core
+                            lanes = new_lanes
+                            roi = new_roi
+                            _original_frame_w = new_frame_w
+                            _original_frame_h = new_frame_h
+                            _last_det = None
+                            _last_published_occupancy = None
+                            record_stream_state(camera_id, "connecting")
+                            logger.info("Hot-reloaded lanes/zones for %s", camera_id)
+                        except Exception:
+                            logger.exception("Failed to hot-reload lanes/zones for %s", camera_id)
+                            record_stream_state(camera_id, "error", "Lane/zone hot reload failed")
+
                     success, frame = reader.read()
                     if not success or frame is None:
                         read_failures += 1
@@ -746,8 +794,13 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
     return canvas
 
 
-def _mjpeg_generator(camera_id: str, queue: Queue, fps: float = 25.0):
-    """MJPEG streaming generator bounded to fresh frames at the target output FPS."""
+def _mjpeg_generator(
+    camera_id: str,
+    queue: Queue,
+    fps: float = 25.0,
+    stop_event: threading.Event | None = None,
+):
+    """Stream fresh MJPEG frames until the pipeline is stopped or disconnected."""
     from tf_common.monitoring.live_metrics import record_output_frame
 
     interval = 1.0 / max(fps, 1.0)
@@ -758,7 +811,7 @@ def _mjpeg_generator(camera_id: str, queue: Queue, fps: float = 25.0):
     _no_signal: bytes | None = None
 
     try:
-        while True:
+        while stop_event is None or not stop_event.is_set():
             timeout = min(interval, 0.5)
             try:
                 jpeg_bytes = queue.get(timeout=timeout)
@@ -942,6 +995,7 @@ async def live_stream_mjpg(
         target_fps = float(fps or meta.get("source_fps") or 25.0)
 
     return StreamingResponse(
-        _mjpeg_generator(camera_id, queue, fps=target_fps),
+        _mjpeg_generator(camera_id, queue, fps=target_fps, stop_event=stop_ev),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )

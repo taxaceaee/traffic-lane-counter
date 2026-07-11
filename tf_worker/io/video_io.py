@@ -232,15 +232,28 @@ class YouTubeLiveReader:
         if self._mode == self.MODE_ONE_SHOT:
             self._setup_one_shot()
         else:
-            self._setup_live()
+            try:
+                self._setup_live()
+            except ValueError:
+                # A cached HLS URL may have expired between refreshes. Bypass
+                # the cache once before surfacing the failure so a new live
+                # pipeline can recover even after a long-running session.
+                self._stream_info = self._resolve_stream_info(force_refresh=True)
+                self._setup_live()
 
     # --- yt-dlp helpers ---------------------------------------------------------
 
-    def _resolve_stream_info(self) -> dict:
+    def _resolve_stream_info(self, force_refresh: bool = False) -> dict:
         """Resolve YouTube URL via canonical yt-dlp helper (cookie+retry)."""
         from tf_common.yt_utils import resolve_stream_info as _resolve_yt
 
-        info = _resolve_yt(self._source_url, fmt=self._format, retries=3)
+        info = _resolve_yt(
+            self._source_url,
+            fmt=self._format,
+            retries=3,
+            use_cache=not force_refresh,
+            allow_stale_cache=not force_refresh,
+        )
         return dict(info)
 
     # --- setup helpers -----------------------------------------------------------
@@ -341,7 +354,7 @@ class YouTubeLiveReader:
                 break
 
             try:
-                new_info = self._resolve_stream_info()
+                new_info = self._resolve_stream_info(force_refresh=True)
                 new_url = new_info.get("url")
                 if new_url and new_url != self._stream_info.get("url"):
                     self._swap_capture(new_url)

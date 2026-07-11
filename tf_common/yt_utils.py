@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -12,6 +13,9 @@ logger = logging.getLogger("trafficflow.yt_utils")
 DEFAULT_FORMAT = "best[height<=720]"
 MAX_RETRIES = 3
 RETRY_DELAY_S = 5.0
+_LIVE_STREAM_CACHE_TTL_S = 300.0
+_stream_info_cache: dict[str, tuple[dict[str, Any], float]] = {}
+_stream_info_cache_lock = threading.Lock()
 
 
 def build_ydl_opts(
@@ -52,9 +56,25 @@ def resolve_stream_info(
     url: str,
     fmt: str = DEFAULT_FORMAT,
     retries: int = MAX_RETRIES,
+    use_cache: bool = False,
+    allow_stale_cache: bool = True,
 ) -> dict[str, Any]:
-    """Resolve a YouTube URL to direct stream metadata."""
+    """Resolve a YouTube URL to direct stream metadata.
+
+    ``use_cache`` is intended for live-reader restarts. A config reload should
+    not discard a still-valid HLS URL and immediately trigger another YouTube
+    page extraction, which is especially prone to transient anti-bot failures.
+    Periodic refreshes can bypass this cache by leaving it disabled.
+    """
     import yt_dlp
+
+    cache_key = f"{url}\x00{fmt}"
+    if use_cache:
+        with _stream_info_cache_lock:
+            cached = _stream_info_cache.get(cache_key)
+            if cached is not None and time.monotonic() - cached[1] < _LIVE_STREAM_CACHE_TTL_S:
+                logger.info("Using cached YouTube live stream URL for %s", url)
+                return dict(cached[0])
 
     last_exc: Exception | None = None
     for attempt in range(1, retries + 1):
@@ -71,6 +91,8 @@ def resolve_stream_info(
             }
             if not resolved["url"]:
                 raise ValueError("yt-dlp returned no stream URL")
+            with _stream_info_cache_lock:
+                _stream_info_cache[cache_key] = (dict(resolved), time.monotonic())
             return resolved
         except Exception as exc:
             last_exc = exc
@@ -83,6 +105,20 @@ def resolve_stream_info(
                     RETRY_DELAY_S,
                 )
                 time.sleep(RETRY_DELAY_S)
+
+    # A short-lived extractor failure must not take down a stream that was
+    # already resolved successfully. The reader will still refresh normally
+    # when its periodic refresh path explicitly bypasses this cache.
+    if allow_stale_cache:
+        with _stream_info_cache_lock:
+            cached = _stream_info_cache.get(cache_key)
+            if cached is not None and time.monotonic() - cached[1] < _LIVE_STREAM_CACHE_TTL_S:
+                logger.warning(
+                    "yt-dlp could not resolve %s; reusing cached live URL: %s",
+                    url,
+                    last_exc,
+                )
+                return dict(cached[0])
 
     raise ValueError(
         f"Failed to resolve stream info after {retries} retries: {last_exc}"

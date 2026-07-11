@@ -150,5 +150,15 @@ async def update_zones(
     zones_path = _get_zones_path(camera_id)
     _write_zones_yaml_atomic(zones_path, output)
 
+    # Request a config-only hot reload. The existing video reader stays alive;
+    # the capture loop swaps DetectionCore/ROI at the next frame boundary.
+    from tf_api.api.routes_live import _request_stream_reload
+    live_reloaded = _request_stream_reload(camera_id)
+
     logger.info("Zones updated for %s: %d zones", camera_id, len(zones_data))
-    return {"status": "saved", "camera_id": camera_id, "zone_count": len(zones_data)}
+    return {
+        "status": "saved",
+        "camera_id": camera_id,
+        "zone_count": len(zones_data),
+        "live_reloaded": live_reloaded,
+    }

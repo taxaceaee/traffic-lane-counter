@@ -708,14 +708,14 @@ function pointInPolygon(pt, polygon) {
 async function saveZonesConfig() {
     const camera_id = document.getElementById('lanes-cam-select').value;
     if (!camera_id) return;
-    if (!zonesData.length) { setStatus('No zones to save.'); return; }
     for (const z of zonesData) { if (!z.polygon || z.polygon.length < 3) { setStatus('Zone '+z.zone_id+' needs >=3 points.'); return; } }
     const payload = { zones: zonesData.map(z => ({ zone_id: z.zone_id, name: z.name||'', polygon: z.polygon })) };
     try {
         const res = await apiRequest(`/api/cameras/${camera_id}/zones`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
         if (res) {
-            setStatus('Saved '+zonesData.length+' zones.');
-            if (typeof showToast === 'function') showToast({severity:'success', title:'Zones Saved', message:zonesData.length+' zones for '+camera_id});
+            const live = res.live_reloaded ? ' Live pipeline updated without stopping video.' : '';
+            setStatus('Saved '+zonesData.length+' zones.' + live);
+            if (typeof showToast === 'function') showToast({severity:'success', title:'Zones Saved', message:zonesData.length+' zones for '+camera_id+'.'+live});
         } else { setStatus('Save failed.'); }
     } catch(e) { setStatus('Save error: '+e.message); }
 }
@@ -723,14 +723,14 @@ async function saveZonesConfig() {
 async function saveLanesConfig() {
     const camera_id = document.getElementById('lanes-cam-select').value;
     if (!camera_id) return;
-    if (!lanesData.length) { setStatus('No lanes to save.'); return; }
     for (const l of lanesData) { if (!l.polygon || l.polygon.length < 3) { setStatus('Lane '+l.lane_id+' needs >=3 points.'); return; } }
     const payload = { lanes: lanesData.map(l => ({ lane_id: l.lane_id, name: l.name||'', polygon: l.polygon, counting_line: l.counting_line||undefined })) };
     try {
         const res = await apiRequest(`/api/cameras/${camera_id}/lanes`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
         if (res) {
-            setStatus('Saved '+lanesData.length+' lanes.');
-            if (typeof showToast === 'function') showToast({severity:'success', title:'Lanes Saved', message:lanesData.length+' lanes for '+camera_id});
+            const live = res.live_reloaded ? ' Live pipeline updated without stopping video.' : '';
+            setStatus('Saved '+lanesData.length+' lanes.' + live);
+            if (typeof showToast === 'function') showToast({severity:'success', title:'Lanes Saved', message:lanesData.length+' lanes for '+camera_id+'.'+live});
         } else { setStatus('Save failed.'); }
     } catch(e) { setStatus('Save error: '+e.message); }
 }
