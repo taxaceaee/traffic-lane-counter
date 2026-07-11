@@ -242,11 +242,29 @@ class SqlAggregateRepository:
 
 # ── QueryRepository — read queries for dashboard / API ─────────────────────────
 
-class SqlQueryRepository:
-    """Read-only queries on top of vehicle_count_events + traffic_aggregates."""
+# Explicit demo/seed job markers — never surface as fleet traffic by default.
+DEMO_JOB_IDS = frozenset({"seed", "demo", "sample", "fixture"})
 
-    def __init__(self, session: Session):
+
+class SqlQueryRepository:
+    """Read-only queries on top of vehicle_count_events + traffic_aggregates.
+
+    By default, rows with ``job_id`` in :data:`DEMO_JOB_IDS` are excluded so
+    ``scripts.seed_db`` never masquerades as live pipeline traffic.
+    """
+
+    def __init__(self, session: Session, *, exclude_demo_jobs: bool = True):
         self.session = session
+        self.exclude_demo_jobs = exclude_demo_jobs
+
+    def _filter_demo_jobs(self, q):
+        if not self.exclude_demo_jobs:
+            return q
+        # Keep NULL job_ids and all real jobs (live-*, offline UUIDs, …).
+        return q.filter(
+            (VehicleCountEvent.job_id.is_(None))
+            | (~VehicleCountEvent.job_id.in_(tuple(DEMO_JOB_IDS)))
+        )
 
     def get_counts_summary(
         self,
@@ -267,6 +285,7 @@ class SqlQueryRepository:
             VehicleCountEvent.vehicle_type,
             func.count().label("count"),
         )
+        q = self._filter_demo_jobs(q)
 
         if camera_id:
             q = q.filter(VehicleCountEvent.camera_id == camera_id)
@@ -311,6 +330,7 @@ class SqlQueryRepository:
         from sqlalchemy import func
 
         q = self.session.query(func.count(VehicleCountEvent.id))
+        q = self._filter_demo_jobs(q)
         if camera_id:
             q = q.filter(VehicleCountEvent.camera_id == camera_id)
         if since:
@@ -342,12 +362,15 @@ class SqlQueryRepository:
         """Return the most recent raw count events for a camera."""
         q = self.session.query(VehicleCountEvent).filter(
             VehicleCountEvent.camera_id == camera_id,
-        ).order_by(VehicleCountEvent.created_at.desc()).limit(limit).offset(offset)
+        )
+        q = self._filter_demo_jobs(q)
+        q = q.order_by(VehicleCountEvent.created_at.desc()).limit(limit).offset(offset)
 
         return [
             {
                 "id": ev.id,
                 "camera_id": ev.camera_id,
+                "job_id": ev.job_id,
                 "lane_id": ev.lane_id,
                 "track_id": ev.track_id,
                 "vehicle_type": ev.vehicle_type,
@@ -412,6 +435,7 @@ class SqlQueryRepository:
             VehicleCountEvent.direction != "",
             VehicleCountEvent.direction.in_(["forward", "backward"]),
         )
+        q = self._filter_demo_jobs(q)
 
         if since:
             q = q.filter(VehicleCountEvent.created_at >= since)
@@ -441,7 +465,9 @@ class SqlQueryRepository:
         ).filter(
             VehicleCountEvent.camera_id == camera_id,
             VehicleCountEvent.created_at >= recent,
-        ).group_by(VehicleCountEvent.lane_id)
+        )
+        q = self._filter_demo_jobs(q)
+        q = q.group_by(VehicleCountEvent.lane_id)
         occ: dict[str, int] = {}
         for lane_id, vehicle_count in q:
             occ[lane_id] = int(vehicle_count or 0)
@@ -522,6 +548,7 @@ class SqlQueryRepository:
             VehicleCountEvent.created_at >= since,
             VehicleCountEvent.created_at < until,
         )
+        q = self._filter_demo_jobs(q)
         if camera_id:
             q = q.filter(VehicleCountEvent.camera_id == camera_id)
         q = q.group_by(hour_expr)

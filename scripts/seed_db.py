@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the database with sample crossing events for development/testing.
+"""DEV-ONLY synthetic traffic seeder — NOT part of the production runtime path.
 
 Usage::
 
@@ -8,9 +8,14 @@ Usage::
     python -m scripts.seed_db --count 1000                 # number of events
     python -m scripts.seed_db --clear                      # clear existing data first
 
-This creates synthetic events so the dashboard shows data even when no
-inference job has been run.  For production, use ``import_jsonl.py``
-with real pipeline output.
+IMPORTANT
+---------
+* This CLI is **opt-in**. The API lifespan never imports or runs it.
+* Every synthetic row is tagged ``job_id="seed"``.
+* Dashboard / Counting / Events / Reports query paths **exclude** demo job_ids
+  (``seed``, ``demo``, ``sample``, ``fixture``) by default so seeded rows cannot
+  masquerade as live pipeline traffic.
+* Production / always-on live data uses ``job_id="live-{camera_id}"``.
 """
 
 from __future__ import annotations
@@ -30,6 +35,8 @@ logger = logging.getLogger("seed_db")
 VEHICLE_TYPES = ["car", "motorcycle", "truck", "bus"]
 DIRECTIONS = ["forward", "backward"]
 LANES = ["lane_1", "lane_2"]
+# Fixed marker consumed by SqlQueryRepository.DEMO_JOB_IDS exclusion.
+SEED_JOB_ID = "seed"
 
 
 def seed_database(
@@ -38,7 +45,7 @@ def seed_database(
     clear: bool = False,
     days_back: int = 1,
 ) -> None:
-    """Insert synthetic crossing events into the database."""
+    """Insert synthetic crossing events into the database (dev only)."""
     from tf_api.storage_adapters import make_server_adapters
     from tf_db.session import SessionLocal
 
@@ -64,7 +71,7 @@ def seed_database(
             )
             event = {
                 "camera_id": camera_id,
-                "job_id": "seed",
+                "job_id": SEED_JOB_ID,
                 "lane_id": rng.choice(LANES),
                 "track_id": rng.randint(1, 500),
                 "vehicle_type": rng.choice(VEHICLE_TYPES),
@@ -77,7 +84,12 @@ def seed_database(
                 adapter.events.insert_event(event)
                 inserted += 1
 
-        logger.info("Inserted %d sample events for camera %s", inserted, camera_id)
+        logger.info(
+            "Inserted %d DEV-ONLY sample events for camera %s (job_id=%s; excluded from fleet queries)",
+            inserted,
+            camera_id,
+            SEED_JOB_ID,
+        )
         adapter.commit()
 
     finally:
@@ -87,7 +99,10 @@ def seed_database(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seed database with synthetic crossing events for dev/testing.",
+        description=(
+            "DEV-ONLY: seed synthetic crossing events (job_id=seed). "
+            "Not used by API boot or always-on live."
+        ),
     )
     parser.add_argument("--camera", default="CAM_STREAM_TEST", help="Camera ID")
     parser.add_argument("--count", type=int, default=200, help="Number of events")
