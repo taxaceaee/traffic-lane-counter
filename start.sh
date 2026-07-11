@@ -2,7 +2,16 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+# Prefer 3.10/3.11 for torch/ultralytics wheels; fall back to python3.
+if [ -z "${PYTHON_BIN:-}" ]; then
+  if command -v python3.10 >/dev/null 2>&1; then
+    PYTHON_BIN=python3.10
+  elif command -v python3.11 >/dev/null 2>&1; then
+    PYTHON_BIN=python3.11
+  else
+    PYTHON_BIN=python3
+  fi
+fi
 HOST="${HOST:-0.0.0.0}"
 PORT_WAS_EXPLICIT=0
 if [ -n "${PORT:-}" ]; then
@@ -42,7 +51,7 @@ if [ "$BOOTSTRAP_REQUIRED" -eq 1 ]; then
     .venv/bin/python -m pip install \
       --index-url https://download.pytorch.org/whl/cu121 \
       --extra-index-url https://pypi.org/simple \
-      torch==2.2.2+cu121 torchvision==0.17.2+cu121 --cert "$PIP_CERT"
+      "torch==2.5.1+cu121" "torchvision==0.20.1+cu121" --cert "$PIP_CERT"
     .venv/bin/python -m pip install -e ".[dev]" --cert "$PIP_CERT"
     export HALF_PRECISION="${HALF_PRECISION:-true}"
   else
@@ -50,7 +59,7 @@ if [ "$BOOTSTRAP_REQUIRED" -eq 1 ]; then
     .venv/bin/python -m pip install \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      torch==2.7.1+cpu torchvision==0.22.1+cpu --cert "$PIP_CERT"
+      "torch==2.5.1+cpu" "torchvision==0.20.1+cpu" --cert "$PIP_CERT"
     .venv/bin/python -m pip install -e ".[dev]" --cert "$PIP_CERT"
     export HALF_PRECISION="${HALF_PRECISION:-false}"
   fi
