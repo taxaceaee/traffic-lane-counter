@@ -57,12 +57,22 @@ security = HTTPBearer(auto_error=False)
 _MAX_STREAMS = 16
 # How often to scan for idle pipelines (no MJPEG viewers).
 _STREAM_CLEANUP_INTERVAL = 10  # seconds
-# Tear down pipelines quickly after the browser switches cameras so YOLO/encode
-# on the previous camera no longer steal GPU/CPU from the active stream.
+# Tear down *viewer-only* pipelines after no MJPEG consumers.
+# always_on pipelines (auto-started) are never cleaned by this path.
 _STREAM_IDLE_TTL_SEC = 20.0
 _MAX_RECONNECT_ATTEMPTS = 10
 _RECONNECT_BACKOFF_BASE = 1.0
 _RECONNECT_BACKOFF_MAX = 60.0
+_SUPERVISOR_INTERVAL_SEC = 30.0
+_supervisor_stop: threading.Event | None = None
+_supervisor_thread: threading.Thread | None = None
+
+
+def _env_auto_start_live() -> bool:
+    """When true, all camera YAMLs run detection continuously after API boot."""
+    return os.getenv("AUTO_START_LIVE_STREAMS", "true").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
 # Each stream holds: (DetectionCore, Queue, meta_dict, StorageWorker, session, stop_event)
 _streams: dict[str, tuple[DetectionCore, Queue, dict[str, Any], Any, Any, threading.Event]] = {}
@@ -103,7 +113,12 @@ def _restore_original_bboxes(det: dict[str, Any], roi: CropROI | None, width: in
 
 
 def _cleanup_stale_streams(force: bool = False) -> None:
-    """Remove streams that have no active MJPEG consumers."""
+    """Remove viewer-only streams with no MJPEG consumers.
+
+    Pipelines marked ``always_on`` (auto-started at boot) keep running so
+    Dashboard / Events / counts keep receiving realtime data without a browser
+    opening Live Monitoring.
+    """
     global _last_cleanup
     now = time.monotonic()
     if not force and now - _last_cleanup < _STREAM_CLEANUP_INTERVAL:
@@ -113,12 +128,152 @@ def _cleanup_stale_streams(force: bool = False) -> None:
         dead = [
             cid
             for cid, (_core, _q, meta, sw, sess, stop_ev) in _streams.items()
-            if meta.get("connections", 0) <= 0
+            if not meta.get("always_on")
+            and meta.get("connections", 0) <= 0
             and now - meta.get("last_access", 0) > _STREAM_IDLE_TTL_SEC
         ]
     for cid in dead:
         if _cleanup_stream(cid):
             logger.info("Cleaned up idle stream (no viewers): %s", cid)
+
+
+def ensure_live_pipeline(camera_id: str, *, always_on: bool = False) -> bool:
+    """Ensure a live detection pipeline is running for *camera_id*.
+
+    Returns True if the pipeline is (or becomes) registered in ``_streams``.
+    Safe to call repeatedly from autostart / supervisor / MJPEG handlers.
+    """
+    validate_identifier(camera_id, name="camera_id")
+    with _lock:
+        if camera_id in _streams:
+            meta = _streams[camera_id][2]
+            if always_on:
+                meta["always_on"] = True
+            meta["last_access"] = time.monotonic()
+            return True
+        max_streams = max(1, min(get_max_streams() or _MAX_STREAMS, 64))
+        if len(_streams) >= max_streams:
+            logger.warning(
+                "Cannot start %s: max concurrent streams reached (%d)",
+                camera_id, max_streams,
+            )
+            return False
+
+    cfg = _load_camera_config(camera_id)
+    if cfg is None:
+        logger.warning("Cannot start live pipeline: camera config missing for %s", camera_id)
+        return False
+
+    try:
+        core, queue, stream_meta, sw, sess, stop_ev = _start_pipeline(camera_id, cfg)
+    except Exception:
+        logger.exception("Failed to start live pipeline for %s", camera_id)
+        try:
+            from tf_common.monitoring.live_metrics import record_stream_state
+            record_stream_state(camera_id, "error", "Pipeline start failed")
+        except Exception:
+            pass
+        return False
+
+    stream_meta["always_on"] = bool(always_on)
+    stream_meta["connections"] = int(stream_meta.get("connections", 0) or 0)
+    stream_meta["last_access"] = time.monotonic()
+
+    with _lock:
+        if camera_id in _streams:
+            # Another starter won the race — stop the duplicate we just created.
+            stop_ev.set()
+            try:
+                sw.stop(timeout=1.0)
+            except Exception:
+                pass
+            return True
+        _streams[camera_id] = (core, queue, stream_meta, sw, sess, stop_ev)
+
+    logger.info(
+        "Live pipeline started for %s (always_on=%s)",
+        camera_id, always_on,
+    )
+    return True
+
+
+def list_configured_camera_ids() -> list[str]:
+    cam_dir = Path("configs/cameras")
+    if not cam_dir.exists():
+        return []
+    return sorted(p.stem for p in cam_dir.glob("*.yaml"))
+
+
+def start_all_live_pipelines(*, stagger_sec: float = 1.5) -> dict[str, bool]:
+    """Start always-on detection for every camera YAML (staggered)."""
+    results: dict[str, bool] = {}
+    ids = list_configured_camera_ids()
+    if not ids:
+        logger.warning("No camera configs found under configs/cameras/")
+        return results
+    logger.info("Auto-starting %d live pipeline(s)...", len(ids))
+    for i, camera_id in enumerate(ids):
+        results[camera_id] = ensure_live_pipeline(camera_id, always_on=True)
+        if i + 1 < len(ids) and stagger_sec > 0:
+            time.sleep(stagger_sec)
+    ok = sum(1 for v in results.values() if v)
+    logger.info("Auto-start complete: %d/%d pipelines running", ok, len(ids))
+    return results
+
+
+def start_live_supervisor() -> None:
+    """Background loop: re-start always-on cameras that died."""
+    global _supervisor_stop, _supervisor_thread
+    if not _env_auto_start_live():
+        logger.info("AUTO_START_LIVE_STREAMS disabled — supervisor not started")
+        return
+    if _supervisor_thread is not None and _supervisor_thread.is_alive():
+        return
+    _supervisor_stop = threading.Event()
+
+    def _loop() -> None:
+        assert _supervisor_stop is not None
+        # Initial boot: start everything once (blocking in this thread).
+        try:
+            start_all_live_pipelines(stagger_sec=1.5)
+        except Exception:
+            logger.exception("Initial live auto-start failed")
+        while not _supervisor_stop.wait(_SUPERVISOR_INTERVAL_SEC):
+            if not _env_auto_start_live():
+                continue
+            for camera_id in list_configured_camera_ids():
+                try:
+                    with _lock:
+                        running = camera_id in _streams
+                    if not running:
+                        logger.warning("Supervisor restarting missing pipeline: %s", camera_id)
+                        ensure_live_pipeline(camera_id, always_on=True)
+                    else:
+                        # Heartbeat always_on streams so incidental cleaners leave them alone.
+                        with _lock:
+                            stream = _streams.get(camera_id)
+                            if stream is not None:
+                                meta = stream[2]
+                                if meta.get("always_on"):
+                                    meta["last_access"] = time.monotonic()
+                except Exception:
+                    logger.exception("Supervisor failed for %s", camera_id)
+
+    _supervisor_thread = threading.Thread(
+        target=_loop, daemon=True, name="live-supervisor",
+    )
+    _supervisor_thread.start()
+    logger.info("Live pipeline supervisor started")
+
+
+def stop_live_supervisor() -> None:
+    global _supervisor_stop, _supervisor_thread
+    if _supervisor_stop is not None:
+        _supervisor_stop.set()
+    if _supervisor_thread is not None:
+        _supervisor_thread.join(timeout=5.0)
+    _supervisor_thread = None
+    _supervisor_stop = None
 
 
 def _load_camera_config(camera_id: str) -> dict[str, Any] | None:
@@ -661,14 +816,16 @@ def _start_pipeline(
                         continue
                     read_failures = 0
 
-                    # If nobody is watching this camera, drain the source buffer
-                    # lightly and skip YOLO/encode so other cameras stay smooth.
-                    # Grace 2s after last_access avoids a race where the capture
-                    # thread starts before the MJPEG handler increments connections.
+                    always_on = bool(stream_meta.get("always_on"))
                     viewers = int(stream_meta.get("connections", 0) or 0)
                     last_access = float(stream_meta.get("last_access", 0.0) or 0.0)
                     idle_for = time.monotonic() - last_access
-                    if viewers <= 0 and idle_for > 2.0:
+                    # always_on pipelines keep detecting so Dashboard/Events get data
+                    # without a browser watching MJPEG. Viewer-only pipelines may
+                    # idle-skip when nobody is connected.
+                    if always_on:
+                        stream_meta["last_access"] = time.monotonic()
+                    elif viewers <= 0 and idle_for > 2.0:
                         _update_snapshot(camera_id, frame)
                         time.sleep(0.03)
                         frame_idx += 1
@@ -785,16 +942,22 @@ def _start_pipeline(
                             crop_bytes,
                         ))
 
-                    # 5. Annotate in-place on full-resolution pipeline_frame
-                    # (never downscale for preview — quality = source frame_size).
-                    t_annotate = time.perf_counter()
-                    annotated = _annotate(pipeline_frame, display_det, lanes)
-                    _log_timing(camera_id, "annotate", (time.perf_counter() - t_annotate) * 1000)
-
-                    # Publish full-res frame for paced preview encoder (non-blocking).
-                    t_submit = time.perf_counter()
-                    _publish_preview_frame(annotated)
-                    _log_timing(camera_id, "preview_publish", (time.perf_counter() - t_submit) * 1000)
+                    # 5. Annotate + encode only when someone is watching MJPEG.
+                    # always_on detection still runs above so fleet data stays fresh
+                    # without paying full annotate/JPEG cost per headless camera.
+                    if viewers > 0:
+                        t_annotate = time.perf_counter()
+                        annotated = _annotate(pipeline_frame, display_det, lanes)
+                        _log_timing(
+                            camera_id, "annotate",
+                            (time.perf_counter() - t_annotate) * 1000,
+                        )
+                        t_submit = time.perf_counter()
+                        _publish_preview_frame(annotated)
+                        _log_timing(
+                            camera_id, "preview_publish",
+                            (time.perf_counter() - t_submit) * 1000,
+                        )
 
                     # ── Persist crossing events to DB ──────────────────
                     for (lane_id, track_id, class_name, direction,
@@ -1295,33 +1458,19 @@ async def live_stream_mjpg(
     _authorize_live_request(cred, stream_token, camera_id)
     _cleanup_stale_streams()
 
-    with _lock:
-        max_streams = max(1, min(get_max_streams() or _MAX_STREAMS, 64))
-        if camera_id not in _streams:
-            if len(_streams) >= max_streams:
-                return JSONResponse(
-                    {"detail": "Maximum concurrent streams reached"},
-                    status_code=503,
-                )
-            cfg = _load_camera_config(camera_id)
-            if cfg is None:
-                return JSONResponse(
-                    {"detail": f"Camera not found: {camera_id}"},
-                    status_code=404,
-                )
-            try:
-                core, queue, stream_meta, sw, sess, stop_ev = _start_pipeline(camera_id, cfg)
-            except Exception as exc:
-                logger.exception("Failed to start live pipeline for %s", camera_id)
-                from tf_common.monitoring.live_metrics import record_stream_state
-                record_stream_state(camera_id, "error", f"Pipeline start failed: {type(exc).__name__}")
-                return JSONResponse(
-                    {"detail": f"Live pipeline could not start for {camera_id}"},
-                    status_code=503,
-                )
-            stream_meta.update({"connections": 0, "last_access": time.monotonic()})
-            _streams[camera_id] = (core, queue, stream_meta, sw, sess, stop_ev)
+    # Reuse always-on pipeline if present; otherwise start a viewer-owned one.
+    if not ensure_live_pipeline(camera_id, always_on=_env_auto_start_live()):
+        return JSONResponse(
+            {"detail": f"Live pipeline could not start for {camera_id}"},
+            status_code=503,
+        )
 
+    with _lock:
+        if camera_id not in _streams:
+            return JSONResponse(
+                {"detail": f"Live pipeline not available for {camera_id}"},
+                status_code=503,
+            )
         core, queue, meta, sw, sess, stop_ev = _streams[camera_id]
         meta["connections"] = meta.get("connections", 0) + 1
         meta["last_access"] = time.monotonic()

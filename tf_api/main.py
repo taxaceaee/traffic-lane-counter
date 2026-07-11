@@ -138,11 +138,23 @@ async def lifespan(_app: FastAPI):
         "camera_id": alert.get("camera_id"),
         "data": alert,
     }))
+    # Auto-start always-on live detection for every camera YAML so Dashboard /
+    # Events / occupancy keep receiving realtime data without opening Live UI.
+    try:
+        from tf_api.api.routes_live import start_live_supervisor, stop_live_supervisor
+        start_live_supervisor()
+        logger.info("Live always-on supervisor requested (AUTO_START_LIVE_STREAMS)")
+    except Exception:
+        logger.exception("Failed to start live always-on supervisor")
     yield
     logger.info("Detection server shutting down")
     try:
-        from tf_api.api.routes_live import _cleanup_stream, _streams
-
+        from tf_api.api.routes_live import (
+            _cleanup_stream,
+            _streams,
+            stop_live_supervisor,
+        )
+        stop_live_supervisor()
         for camera_id in list(_streams.keys()):
             try:
                 _cleanup_stream(camera_id)
