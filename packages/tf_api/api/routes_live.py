@@ -877,14 +877,14 @@ def _start_pipeline(
     preview_defaults = get_preview_defaults()
     # Full source resolution is preserved; quality is tuned for encode speed so
     # Output FPS stays close to the preview target on laptop GPUs.
-    jpeg_quality = int(preview_defaults.get("jpeg_quality", 62))
-    # Multi-cam: drop encode cost first so Process FPS stays healthy.
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 70))
+    # Multi-cam: slightly lower encode cost, but keep a floor so labels stay sharp.
     load = _count_active_pipelines()
     if load >= 2:
-        jpeg_quality = min(jpeg_quality, 60)
+        jpeg_quality = min(jpeg_quality, 68)
     if load >= 3:
-        jpeg_quality = min(jpeg_quality, 55)
-    jpeg_quality = max(50, min(85, jpeg_quality))
+        jpeg_quality = min(jpeg_quality, 64)
+    jpeg_quality = max(62, min(90, jpeg_quality))
     preview_target_fps = float(preview_defaults.get("target_fps", 12) or 12)
     # Cap preview to Process-FPS class rates; high targets only burn CPU.
     preview_target_fps = max(6.0, min(18.0, preview_target_fps))
@@ -918,22 +918,13 @@ def _start_pipeline(
     _preview_seq = 0
 
     def _publish_preview_frame(annotated: np.ndarray) -> None:
-        """Store newest annotated frame for encode (may downscale for Out FPS)."""
+        """Store newest annotated frame for encode (already preview-sized)."""
         nonlocal _preview_frame, _preview_seq
-        frame_ref = annotated
-        # Encode-only downscale — detection already ran at ROI/native size.
-        if preview_max_edge and preview_max_edge > 0:
-            h, w = annotated.shape[:2]
-            longest = max(h, w)
-            if longest > preview_max_edge:
-                scale = preview_max_edge / float(longest)
-                nw = max(2, int(w * scale))
-                nh = max(2, int(h * scale))
-                frame_ref = cv2.resize(annotated, (nw, nh), interpolation=cv2.INTER_AREA)
-                stream_meta["preview_width"] = nw
-                stream_meta["preview_height"] = nh
         # Own the buffer so capture can draw the next frame without races.
-        frame_copy = annotated.copy() if frame_ref is annotated else frame_ref
+        h, w = annotated.shape[:2]
+        stream_meta["preview_width"] = w
+        stream_meta["preview_height"] = h
+        frame_copy = annotated.copy()
         with _preview_lock:
             _preview_frame = frame_copy
             _preview_seq += 1
@@ -1274,10 +1265,27 @@ def _start_pipeline(
                     if viewers > 0:
                         t_annotate = time.perf_counter()
                         try:
-                            annotated = _annotate(pipeline_frame, display_det, lanes)
+                            # Downscale *before* drawing so labels/boxes stay
+                            # crisp on the final MJPEG (never soft-resized text).
+                            canvas, scale = _preview_canvas(
+                                pipeline_frame, preview_max_edge
+                            )
+                            draw_det = (
+                                display_det
+                                if scale >= 0.999
+                                else _scale_det_geometry(display_det, scale)
+                            )
+                            draw_lanes = (
+                                lanes
+                                if scale >= 0.999
+                                else _scale_lane_geometry(lanes, scale)
+                            )
+                            annotated = _annotate(canvas, draw_det, draw_lanes)
                         except Exception:
                             logger.exception("Annotate failed for %s — raw frame fallback", camera_id)
-                            annotated = pipeline_frame
+                            annotated, _ = _preview_canvas(
+                                pipeline_frame, preview_max_edge
+                            )
                         _log_timing(
                             camera_id, "annotate",
                             (time.perf_counter() - t_annotate) * 1000,
@@ -1415,22 +1423,112 @@ def _start_pipeline(
     return core, annotated_queue, stream_meta, storage_worker, None, stop_event
 
 
+def _preview_canvas(
+    frame: np.ndarray, preview_max_edge: int | None
+) -> tuple[np.ndarray, float]:
+    """Resize for preview encode; returns (owned buffer, scale vs original)."""
+    h, w = frame.shape[:2]
+    if not preview_max_edge or preview_max_edge <= 0:
+        return frame.copy(), 1.0
+    longest = max(h, w)
+    if longest <= preview_max_edge:
+        return frame.copy(), 1.0
+    scale = preview_max_edge / float(longest)
+    nw = max(2, int(w * scale))
+    nh = max(2, int(h * scale))
+    return cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA), scale
+
+
+def _scale_det_geometry(det: dict[str, Any], scale: float) -> dict[str, Any]:
+    """Scale track bboxes into preview pixel space (shallow structure copy)."""
+    out = dict(det)
+    tracks: list[dict[str, Any]] = []
+    for t in det.get("frame_tracks") or []:
+        nt = dict(t)
+        bbox = t.get("bbox")
+        if bbox and len(bbox) >= 4:
+            nt["bbox"] = [float(v) * scale for v in bbox[:4]]
+        tracks.append(nt)
+    out["frame_tracks"] = tracks
+    return out
+
+
+def _scale_lane_geometry(lanes: list[dict], scale: float) -> list[dict]:
+    scaled: list[dict] = []
+    for lane in lanes:
+        nl = dict(lane)
+        pts = lane.get("points") or []
+        nl["points"] = [[float(p[0]) * scale, float(p[1]) * scale] for p in pts]
+        scaled.append(nl)
+    return scaled
+
+
+def _draw_label_box(
+    canvas: np.ndarray,
+    text: str,
+    origin: tuple[int, int],
+    fg: tuple[int, int, int],
+    *,
+    font_scale: float,
+    thickness: int,
+) -> None:
+    """Solid dark pill + white text so labels stay sharp on busy video."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    pad_x, pad_y = 5, 4
+    x, y = origin  # baseline origin (left, bottom of text)
+    x1 = max(0, x)
+    y1 = max(0, y - th - pad_y)
+    x2 = min(canvas.shape[1] - 1, x + tw + pad_x * 2)
+    y2 = min(canvas.shape[0] - 1, y + pad_y)
+    if x2 <= x1 or y2 <= y1:
+        return
+    # Filled background + colored border for contrast.
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), (10, 10, 10), thickness=-1)
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), fg, thickness=max(1, thickness // 2))
+    # White fill is most readable; lane color is on the border only.
+    cv2.putText(
+        canvas,
+        text,
+        (x1 + pad_x, y2 - pad_y - max(0, baseline // 2)),
+        font,
+        font_scale,
+        (255, 255, 255),
+        thickness,
+        lineType=cv2.LINE_AA,
+    )
+
+
 def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.ndarray:
-    canvas = frame  # annotate in-place — saves ~6 MB copy per frame
+    """Draw crisp boxes + labels at *preview* resolution (already sized)."""
+    canvas = frame  # owned buffer from _preview_canvas
+    h, w = canvas.shape[:2]
+    # Scale stroke/font with frame width so 640–1280 previews all stay readable.
+    box_th = max(3, int(round(w / 420)))
+    outline_th = box_th + 2
+    font_scale = max(0.55, min(0.85, w / 1100.0))
+    font_th = max(2, int(round(font_scale * 3.2)))
+    lane_th = max(2, box_th - 1)
+    anchor_r = max(4, box_th + 1)
+
     lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
-    # Track-lane count events (no tripwire geometry). Used only for HUD flash text.
     crossings = det.get("crossings") or []
 
-    # Counting is track+lane based — do not draw tripwire counting lines.
     for lane_data in lanes:
         lane_color = color_for_lane(lane_data["id"], lane_colors)
         pts = np.array(lane_data["points"], dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(canvas, [pts], isClosed=True, color=lane_color, thickness=2)
+        # Dark under-stroke then color for edge definition.
+        cv2.polylines(canvas, [pts], isClosed=True, color=(0, 0, 0), thickness=lane_th + 2, lineType=cv2.LINE_AA)
+        cv2.polylines(canvas, [pts], isClosed=True, color=lane_color, thickness=lane_th, lineType=cv2.LINE_AA)
         first_pt = lane_data["points"][0]
-        cv2.putText(canvas, lane_data["id"], (int(first_pt[0]) + 5, int(first_pt[1]) - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(canvas, lane_data["id"], (int(first_pt[0]) + 5, int(first_pt[1]) - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, lane_color, 1)
+        _draw_label_box(
+            canvas,
+            str(lane_data["id"]),
+            (int(first_pt[0]) + 4, int(first_pt[1]) - 4),
+            lane_color,
+            font_scale=font_scale,
+            thickness=font_th,
+        )
 
     ftracks = det.get("frame_tracks", [])
     for t in ftracks:
@@ -1438,46 +1536,82 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
         if not bbox or len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox]
-        # Same lane → same box color (stable preferred, raw as fallback).
+        # Clamp to frame so thick strokes don't throw.
+        x1 = max(0, min(x1, w - 1))
+        x2 = max(0, min(x2, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        y2 = max(0, min(y2, h - 1))
+        if x2 <= x1 or y2 <= y1:
+            continue
         box_color = color_for_track(
             lane_colors,
             stable_lane=t.get("stable_lane"),
             raw_lane=t.get("raw_lane"),
         )
         stable = t.get("stable_lane") or t.get("raw_lane") or "none"
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
+        # Black outer + bright inner box = sharp even after mild JPEG.
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), outline_th, lineType=cv2.LINE_AA)
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, box_th, lineType=cv2.LINE_AA)
         cx = (x1 + x2) // 2
-        cv2.circle(canvas, (cx, y2), 5, box_color, -1)
+        cv2.circle(canvas, (cx, y2), anchor_r + 1, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, (cx, y2), anchor_r, box_color, -1, lineType=cv2.LINE_AA)
+
         label = f"#{t['track_id']} {t['class_name']} ({stable})"
-        # Dark outline + lane-colored label keeps text readable on busy video.
-        cv2.putText(canvas, label, (x1 + 3, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2)
-        cv2.putText(canvas, label, (x1 + 3, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
+        label_y = y1 - 6 if y1 > 24 else min(h - 4, y2 + int(18 * font_scale))
+        _draw_label_box(
+            canvas,
+            label,
+            (x1, label_y),
+            box_color,
+            font_scale=font_scale,
+            thickness=font_th,
+        )
 
     occupancy = det.get("occupancy", {})
     if occupancy:
-        panel_w, panel_h = 200, 40 + len(occupancy) * 25
-        # Blend only the panel region (small 200xN overlay) instead of full-frame copy
-        panel_overlay = np.full((panel_h, panel_w, 3), (20, 20, 20), dtype=np.uint8)
-        panel_roi = canvas[15:15 + panel_h, 15:15 + panel_w]
-        cv2.addWeighted(panel_overlay, 0.75, panel_roi, 0.25, 0, panel_roi)
-        cv2.rectangle(canvas, (15, 15), (15 + panel_w, 15 + panel_h), (80, 80, 80), 1)
-        cv2.putText(canvas, "LANE OCCUPANCY", (25, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-        cv2.line(canvas, (25, 42), (15 + panel_w - 10, 42), (80, 80, 80), 1)
-        y = 62
+        row_h = max(22, int(24 * font_scale))
+        header_h = max(28, int(32 * font_scale))
+        panel_w = max(210, int(230 * font_scale))
+        panel_h = header_h + 12 + len(occupancy) * row_h + 8
+        panel_overlay = np.full((panel_h, panel_w, 3), (12, 12, 12), dtype=np.uint8)
+        panel_roi = canvas[12:12 + panel_h, 12:12 + panel_w]
+        if panel_roi.shape[0] == panel_h and panel_roi.shape[1] == panel_w:
+            cv2.addWeighted(panel_overlay, 0.82, panel_roi, 0.18, 0, panel_roi)
+        cv2.rectangle(canvas, (12, 12), (12 + panel_w, 12 + panel_h), (220, 220, 220), 2)
+        cv2.putText(
+            canvas, "LANE OCCUPANCY", (22, 12 + header_h - 8),
+            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), font_th, cv2.LINE_AA,
+        )
+        cv2.line(
+            canvas,
+            (22, 12 + header_h),
+            (12 + panel_w - 12, 12 + header_h),
+            (90, 90, 90),
+            1,
+        )
+        y = 12 + header_h + row_h - 4
         for lane_id in sorted(occupancy.keys()):
             lane_color = color_for_lane(lane_id, lane_colors)
-            cv2.putText(canvas, f"{lane_id}:", (25, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, lane_color, 1)
-            cv2.putText(canvas, str(occupancy[lane_id]), (15 + panel_w - 40, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, lane_color, 2)
-            y += 25
+            cv2.putText(
+                canvas, f"{lane_id}:", (22, y),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.95, lane_color, font_th, cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas, str(occupancy[lane_id]), (12 + panel_w - 48, y),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_th, cv2.LINE_AA,
+            )
+            y += row_h
 
     for cx in crossings[:1]:
-        cv2.putText(canvas, f"{cx['class_name']} #{cx['track_id']} {cx['direction']}",
-                    (20, canvas.shape[0] - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        flash = f"{cx['class_name']} #{cx['track_id']} {cx['direction']}"
+        _draw_label_box(
+            canvas,
+            flash,
+            (16, canvas.shape[0] - 14),
+            (0, 255, 255),
+            font_scale=font_scale,
+            thickness=font_th,
+        )
 
     return canvas
 
