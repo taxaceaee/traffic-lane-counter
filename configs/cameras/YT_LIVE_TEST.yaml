@@ -10,7 +10,7 @@ camera:
   allow_scaling: true
 model:
   model_id: yolo11n_coco
-  conf_threshold: 0.25
+  conf_threshold: 0.2
   iou_threshold: 0.45
   allowed_classes:
   - car
@@ -19,7 +19,8 @@ model:
   - bus
   detect_every_n_frames: 1
   max_detections: 500
-  roi_padding: 80
+  roi_padding: 120
+  roi_crop: true
 tracking:
   tracker: bytetrack.yaml
   active_track_timeout_frames: 15

@@ -153,12 +153,8 @@ class Visualizer:
         canvas = frame.copy()
         overlay = np.full_like(canvas, 0, dtype=np.uint8)
 
-        # 0. Draw Counting Lines + half-plane tint (under the polygons so they don't obscure)
-        flashed_line_ids = set()
-        if line_counter is not None and crossings_this_frame:
-            flashed_line_ids = {ev["line_id"] for ev in crossings_this_frame}
-        if line_counter is not None:
-            self._draw_counting_lines(canvas, overlay, line_counter, flashed_line_ids)
+        # Counting is track+lane based — tripwire lines are not drawn.
+        _ = crossings_this_frame  # kept for API compatibility
 
         # 1. Draw Lane Polygons (same color family as vehicle boxes in that lane)
         for lane in self.lanes:

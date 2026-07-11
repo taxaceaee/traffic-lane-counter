@@ -121,8 +121,8 @@ class DetectionCore:
             ``events``: list[dict] — lane-change events (frame, track_id,
                 class_name, previous_stable_lane, current_stable_lane).
             ``occupancy``: dict[lane_id → int] — per-lane vehicle count.
-            ``crossings``: list[dict] — line-crossing events (frame, track_id,
-                class_name, lane_id, line_id, direction, confidence).
+            ``crossings``: list[dict] — track+lane count events (frame, track_id,
+                class_name, lane_id, direction, confidence). No tripwire lines.
             ``frame_tracks``: list[dict] — detailed per-track state for
                 consumers (track_id, class_name, confidence, bbox,
                 raw_lane, stable_lane, is_counted_in_occupancy).
@@ -173,13 +173,13 @@ class DetectionCore:
         return result
 
     def get_counts(self) -> dict[str, dict[str, dict[str, int]]]:
-        """Return cumulative line-crossing tallies per (lane, class, direction)."""
+        """Return cumulative track+lane tallies per (lane, class, direction)."""
         if self.line_counter is None:
             return {}
         return self.line_counter.get_counts()
 
     def get_lines(self) -> list:
-        """Return the configured CountingLine objects."""
+        """No geometric counting lines (track-based counting)."""
         if self.line_counter is None:
             return []
         return self.line_counter.get_lines()

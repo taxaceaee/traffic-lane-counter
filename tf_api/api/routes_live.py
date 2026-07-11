@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from tf_api.api.routes_auth import decode_access_token, get_current_user, require_operator
@@ -69,10 +70,90 @@ _supervisor_thread: threading.Thread | None = None
 
 
 def _env_auto_start_live() -> bool:
-    """When true, all camera YAMLs run detection continuously after API boot."""
+    """Boot default from env AUTO_START_LIVE_STREAMS (true unless off/0/false/no)."""
     return os.getenv("AUTO_START_LIVE_STREAMS", "true").strip().lower() not in {
         "0", "false", "no", "off",
     }
+
+
+# Runtime always-on control (UI toggles). Seeded from env at import; operator
+# can flip fleet / per-camera without restarting the process.
+_always_on_runtime_enabled: bool = _env_auto_start_live()
+_always_on_disabled_cameras: set[str] = set()
+_always_on_control_lock = threading.Lock()
+
+
+class AlwaysOnToggleBody(BaseModel):
+    enabled: bool = Field(..., description="True = run always-on detection")
+
+
+def is_always_on_runtime_enabled() -> bool:
+    with _always_on_control_lock:
+        return _always_on_runtime_enabled
+
+
+def is_camera_always_on_allowed(camera_id: str) -> bool:
+    with _always_on_control_lock:
+        if not _always_on_runtime_enabled:
+            return False
+        return camera_id not in _always_on_disabled_cameras
+
+
+def _count_active_pipelines() -> int:
+    """Pipelines that are always-on or have MJPEG viewers (share the GPU)."""
+    with _lock:
+        n = 0
+        for _core, _q, meta, _sw, _sess, _stop in _streams.values():
+            if meta.get("always_on") or int(meta.get("connections") or 0) > 0:
+                n += 1
+        return n
+
+
+def recommended_detect_every_n(*, viewers: int, always_on: bool) -> int:
+    """YOLO cadence. Max-recall default: every frame (detect_every_n=1).
+
+    Env (optional):
+      ALWAYS_ON_DETECT_EVERY_N — headless cadence (default 1 = catch all vehicles)
+      LIVE_VIEWER_DETECT_EVERY_N — when a browser is watching (default 1)
+      LIVE_RECALL_MODE=fps — restore multi-cam FPS trade-off (every 2 when load≥3)
+    """
+    recall_fps = os.getenv("LIVE_RECALL_MODE", "recall").strip().lower() in {
+        "fps", "speed", "balanced",
+    }
+    load = max(1, _count_active_pipelines())
+    if viewers > 0:
+        if os.getenv("LIVE_VIEWER_DETECT_EVERY_N"):
+            return max(1, int(os.getenv("LIVE_VIEWER_DETECT_EVERY_N", "1")))
+        if recall_fps and load >= 3:
+            return 2
+        return 1
+    if always_on:
+        if os.getenv("ALWAYS_ON_DETECT_EVERY_N"):
+            return max(1, int(os.getenv("ALWAYS_ON_DETECT_EVERY_N", "1")))
+        if recall_fps and load >= 2:
+            return 2
+        return 1
+    return 1
+
+
+def _live_max_imgsz() -> int:
+    """Cap YOLO imgsz. Default 0 = no cap (max recall). Set LIVE_MAX_IMGSZ=960 for FPS."""
+    raw = os.getenv("LIVE_MAX_IMGSZ", "0").strip()
+    try:
+        v = int(raw)
+    except ValueError:
+        return 0
+    return v  # 0 = no cap
+
+
+def _preview_encode_max_edge() -> int:
+    """Downscale MJPEG encode only (detection stays full ROI). 0 = no downscale."""
+    # Keep encode modest so Out FPS stays up while detection runs full quality.
+    raw = os.getenv("LIVE_PREVIEW_MAX_EDGE", "1280").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1280
 
 # Each stream holds: (DetectionCore, Queue, meta_dict, StorageWorker, session, stop_event)
 _streams: dict[str, tuple[DetectionCore, Queue, dict[str, Any], Any, Any, threading.Event]] = {}
@@ -213,6 +294,9 @@ def start_all_live_pipelines(*, stagger_sec: float = 1.5) -> dict[str, bool]:
         return results
     logger.info("Auto-starting %d live pipeline(s)...", len(ids))
     for i, camera_id in enumerate(ids):
+        if not is_camera_always_on_allowed(camera_id):
+            results[camera_id] = False
+            continue
         results[camera_id] = ensure_live_pipeline(camera_id, always_on=True)
         if i + 1 < len(ids) and stagger_sec > 0:
             time.sleep(stagger_sec)
@@ -221,10 +305,156 @@ def start_all_live_pipelines(*, stagger_sec: float = 1.5) -> dict[str, bool]:
     return results
 
 
-def start_live_supervisor() -> None:
+def stop_always_on_pipelines(*, only_camera_id: str | None = None) -> dict[str, bool]:
+    """Clear always_on and stop pipelines that have no MJPEG viewers.
+
+    If a viewer is watching Live, the pipeline keeps running as viewer-owned
+    (always_on=False) so the video does not drop mid-watch.
+    """
+    stopped: dict[str, bool] = {}
+    with _lock:
+        ids = list(_streams.keys())
+    for camera_id in ids:
+        if only_camera_id is not None and camera_id != only_camera_id:
+            continue
+        with _lock:
+            stream = _streams.get(camera_id)
+            if stream is None:
+                stopped[camera_id] = False
+                continue
+            meta = stream[2]
+            meta["always_on"] = False
+            viewers = int(meta.get("connections") or 0)
+        if viewers <= 0:
+            stopped[camera_id] = bool(_cleanup_stream(camera_id))
+            logger.info("Always-on stopped + pipeline cleaned: %s", camera_id)
+        else:
+            stopped[camera_id] = False
+            logger.info(
+                "Always-on cleared for %s but %d viewer(s) keep pipeline running",
+                camera_id, viewers,
+            )
+    return stopped
+
+
+def set_fleet_always_on(enabled: bool) -> dict[str, Any]:
+    """UI/API toggle for fleet-wide always-on detection."""
+    global _always_on_runtime_enabled
+    with _always_on_control_lock:
+        _always_on_runtime_enabled = bool(enabled)
+        if enabled:
+            # Re-enable all cameras that were only fleet-disabled.
+            _always_on_disabled_cameras.clear()
+    if enabled:
+        # Ensure supervisor is running even if boot env was false.
+        start_live_supervisor(force=True)
+        results = start_all_live_pipelines(stagger_sec=0.8)
+    else:
+        results = stop_always_on_pipelines()
+    return {
+        "enabled": is_always_on_runtime_enabled(),
+        "results": results,
+        "status": live_status_snapshot(),
+    }
+
+
+def set_camera_always_on(camera_id: str, enabled: bool) -> dict[str, Any]:
+    global _always_on_runtime_enabled
+    validate_identifier(camera_id, name="camera_id")
+    if camera_id not in list_configured_camera_ids():
+        raise HTTPException(404, f"Camera {camera_id} not found")
+
+    with _always_on_control_lock:
+        if enabled:
+            _always_on_disabled_cameras.discard(camera_id)
+            # Turning one camera on also implies fleet switch is usable.
+            _always_on_runtime_enabled = True
+        else:
+            _always_on_disabled_cameras.add(camera_id)
+
+    if enabled:
+        start_live_supervisor(force=True)
+        ok = ensure_live_pipeline(camera_id, always_on=True)
+        return {
+            "camera_id": camera_id,
+            "enabled": True,
+            "running": ok,
+            "status": live_status_snapshot(),
+        }
+
+    stop_always_on_pipelines(only_camera_id=camera_id)
+    with _lock:
+        running = camera_id in _streams
+        always_on = bool(_streams[camera_id][2].get("always_on")) if running else False
+    return {
+        "camera_id": camera_id,
+        "enabled": False,
+        "running": running,
+        "always_on": always_on,
+        "status": live_status_snapshot(),
+    }
+
+
+def live_status_snapshot() -> dict[str, Any]:
+    """Build fleet status dict (shared by GET /live/status and toggle responses)."""
+    from tf_common.monitoring.live_metrics import get_camera_metrics
+
+    configured = list_configured_camera_ids()
+    cameras: list[dict[str, Any]] = []
+    with _lock:
+        disabled = set(_always_on_disabled_cameras)
+        fleet_on = _always_on_runtime_enabled
+        for camera_id in configured:
+            stream = _streams.get(camera_id)
+            meta = stream[2] if stream is not None else {}
+            metrics = get_camera_metrics(camera_id)
+            cameras.append({
+                "camera_id": camera_id,
+                "running": stream is not None,
+                "always_on": bool(meta.get("always_on")),
+                "always_on_allowed": fleet_on and camera_id not in disabled,
+                "viewers": int(meta.get("connections") or 0),
+                "status": metrics.get("status"),
+                "process_fps": metrics.get("process_fps") or metrics.get("fps") or 0,
+                "output_fps": metrics.get("output_fps") or 0,
+                "vehicle_types": dict(meta.get("vehicle_types") or {}),
+                "occupancy": dict(meta.get("occupancy") or {}),
+                "error": metrics.get("error"),
+            })
+    running = sum(1 for c in cameras if c["running"])
+    always_on_n = sum(1 for c in cameras if c["always_on"])
+    # Hint for UI: what detect cadence headless would use right now.
+    headless_every = recommended_detect_every_n(viewers=0, always_on=True)
+    viewer_every = recommended_detect_every_n(viewers=1, always_on=True)
+    return {
+        "auto_start_enabled": is_always_on_runtime_enabled(),
+        "env_auto_start_default": _env_auto_start_live(),
+        "supervisor_interval_sec": _SUPERVISOR_INTERVAL_SEC,
+        "configured": len(configured),
+        "running": running,
+        "always_on": always_on_n,
+        "disabled_cameras": sorted(disabled),
+        "perf": {
+            "active_pipelines": _count_active_pipelines(),
+            "headless_detect_every_n": headless_every,
+            "viewer_detect_every_n": viewer_every,
+            "max_imgsz": _live_max_imgsz(),
+            "preview_max_edge": _preview_encode_max_edge(),
+            "tip": (
+                "OFF always-on frees GPU for Live FPS. "
+                "ON uses detect every "
+                f"{headless_every} frame(s) headless / every "
+                f"{viewer_every} when watching."
+            ),
+        },
+        "cameras": cameras,
+    }
+
+
+def start_live_supervisor(*, force: bool = False) -> None:
     """Background loop: re-start always-on cameras that died."""
     global _supervisor_stop, _supervisor_thread
-    if not _env_auto_start_live():
+    if not force and not _env_auto_start_live() and not is_always_on_runtime_enabled():
         logger.info("AUTO_START_LIVE_STREAMS disabled — supervisor not started")
         return
     if _supervisor_thread is not None and _supervisor_thread.is_alive():
@@ -235,13 +465,16 @@ def start_live_supervisor() -> None:
         assert _supervisor_stop is not None
         # Initial boot: start everything once (blocking in this thread).
         try:
-            start_all_live_pipelines(stagger_sec=1.5)
+            if is_always_on_runtime_enabled():
+                start_all_live_pipelines(stagger_sec=1.5)
         except Exception:
             logger.exception("Initial live auto-start failed")
         while not _supervisor_stop.wait(_SUPERVISOR_INTERVAL_SEC):
-            if not _env_auto_start_live():
+            if not is_always_on_runtime_enabled():
                 continue
             for camera_id in list_configured_camera_ids():
+                if not is_camera_always_on_allowed(camera_id):
+                    continue
                 try:
                     with _lock:
                         running = camera_id in _streams
@@ -454,16 +687,20 @@ def _build_live_runtime(
             )
             pipeline_cfg = roi.transform_config(pipeline_cfg)
             pipeline_cfg.setdefault("detector", {})
-            # Native crop resolution for max detection quality (no downscale).
-            pipeline_cfg["detector"]["imgsz"] = roi.suggested_imgsz()
+            # Native crop resolution, optionally capped for multi-cam FPS.
+            native = int(roi.suggested_imgsz())
+            cap = _live_max_imgsz()
+            pipeline_cfg["detector"]["imgsz"] = (
+                min(native, cap) if cap and cap > 0 else native
+            )
             logger.info(
                 "ROI crop: %s (area ratio: %.2f%%), imgsz=%d conf=%.2f max_det=%s every_n=%s",
                 roi,
                 roi.area_ratio * 100,
                 pipeline_cfg["detector"]["imgsz"],
                 float(pipeline_cfg["detector"].get("conf", 0.25)),
-                pipeline_cfg["detector"].get("max_detections", 500),
-                pipeline_cfg["detector"].get("detect_every_n_frames", 1),
+                pipeline_cfg["detector"].get("max_detections", 100),
+                pipeline_cfg["detector"].get("detect_every_n_frames", 2),
             )
         except Exception:
             logger.warning("Failed to init CropROI — full frame", exc_info=True)
@@ -471,8 +708,10 @@ def _build_live_runtime(
 
     if roi is None:
         pipeline_cfg.setdefault("detector", {})
-        pipeline_cfg["detector"]["imgsz"] = _native_imgsz(
-            original_frame_w, original_frame_h
+        native = _native_imgsz(original_frame_w, original_frame_h)
+        cap = _live_max_imgsz()
+        pipeline_cfg["detector"]["imgsz"] = (
+            min(native, cap) if cap and cap > 0 else native
         )
 
     return pipeline_cfg, lanes, roi, original_frame_w, original_frame_h
@@ -586,13 +825,18 @@ def _start_pipeline(
     # Full source resolution is preserved; quality is tuned for encode speed so
     # Output FPS stays close to the preview target on laptop GPUs.
     jpeg_quality = int(preview_defaults.get("jpeg_quality", 72))
+    # Encode can stay lighter; detection quality is independent.
+    if _count_active_pipelines() >= 2:
+        jpeg_quality = min(jpeg_quality, 70)
     jpeg_quality = max(55, min(90, jpeg_quality))
     preview_target_fps = float(preview_defaults.get("target_fps", 20) or 20)
     preview_target_fps = max(8.0, min(30.0, preview_target_fps))
+    preview_max_edge = _preview_encode_max_edge()
     stream_meta: dict[str, Any] = {
         "source_fps": float(cfg.get("fps", 25.0) or 25.0),
         "preview_fps_target": preview_target_fps,
         "preview_jpeg_quality": jpeg_quality,
+        "preview_max_edge": preview_max_edge,
         "preview_width": int(_original_frame_w),
         "preview_height": int(_original_frame_h),
         "preserve_source_resolution": bool(
@@ -614,17 +858,28 @@ def _start_pipeline(
     _preview_seq = 0
 
     def _publish_preview_frame(annotated: np.ndarray) -> None:
-        """Store a full-res copy of the newest annotated frame for encode."""
+        """Store newest annotated frame for encode (may downscale for Out FPS)."""
         nonlocal _preview_frame, _preview_seq
-        # New array each time so the encode thread can hold the previous ref
-        # without a second copy, and without racing capture in-place draws.
-        frame_copy = annotated.copy()
+        frame_ref = annotated
+        # Encode-only downscale — detection already ran at ROI/native size.
+        if preview_max_edge and preview_max_edge > 0:
+            h, w = annotated.shape[:2]
+            longest = max(h, w)
+            if longest > preview_max_edge:
+                scale = preview_max_edge / float(longest)
+                nw = max(2, int(w * scale))
+                nh = max(2, int(h * scale))
+                frame_ref = cv2.resize(annotated, (nw, nh), interpolation=cv2.INTER_AREA)
+                stream_meta["preview_width"] = nw
+                stream_meta["preview_height"] = nh
+        # Own the buffer so capture can draw the next frame without races.
+        frame_copy = annotated.copy() if frame_ref is annotated else frame_ref
         with _preview_lock:
             _preview_frame = frame_copy
             _preview_seq += 1
 
     def _encode_worker():
-        """Encode newest full-res frame; drop intermediate frames under load."""
+        """Encode newest preview frame; drop intermediate frames under load."""
         nonlocal _preview_frame, _preview_seq
         last_seq = -1
         min_interval = 1.0 / preview_target_fps
@@ -831,6 +1086,14 @@ def _start_pipeline(
                         frame_idx += 1
                         continue
 
+                    # Adaptive detect cadence from concurrent pipeline load.
+                    if core.tracking_adapter is not None:
+                        every_n = recommended_detect_every_n(
+                            viewers=viewers, always_on=always_on,
+                        )
+                        core.tracking_adapter.detect_every_n = every_n
+                        stream_meta["detect_every_n"] = every_n
+
                     _update_snapshot(camera_id, frame)
 
                     # Serve MJPEG at ORIGINAL resolution.  The pipeline runs only on
@@ -866,7 +1129,13 @@ def _start_pipeline(
                             det["frame_timestamp"] = datetime.now(timezone.utc)
                     if det is None:  # first frame, motion detected, or no motion detector
                         det = core.process_frame(frame_roi, frame_idx=frame_idx)
-                        _last_det = deepcopy(det)
+                        # Keep a frozen snapshot for motion-skip reuse only.
+                        # Avoid deepcopy every frame when motion detector is off
+                        # (youtube_live) — the next process_frame replaces state.
+                        if _motion_detector is not None:
+                            _last_det = deepcopy(det)
+                        else:
+                            _last_det = det
                     detect_ms = (time.perf_counter() - t_detect_start) * 1000
                     _log_timing(camera_id, "detect", detect_ms)
 
@@ -876,15 +1145,18 @@ def _start_pipeline(
                     # coordinates corrupts ByteTrack's cache and causes the
                     # ROI offset to be added again on later frames.
                     #
-                    # Make a display/storage copy instead and restore only
-                    # that copy to original-frame coordinates.
-                    display_det = deepcopy(det)
-                    _restore_original_bboxes(
-                        display_det,
-                        roi,
-                        _original_frame_w,
-                        _original_frame_h,
-                    )
+                    # Only deep-copy for MJPEG annotate. Headless always-on
+                    # skips this (~full det tree copy was a major FPS tax).
+                    if viewers > 0:
+                        display_det = deepcopy(det)
+                        _restore_original_bboxes(
+                            display_det,
+                            roi,
+                            _original_frame_w,
+                            _original_frame_h,
+                        )
+                    else:
+                        display_det = det
 
                     # 4. Record metrics
                     timing = dict(det.get("timing_ms", {}))
@@ -908,6 +1180,9 @@ def _start_pipeline(
                         for track in display_det.get("frame_tracks", [])
                         if track.get("track_id") is not None and track.get("bbox")
                     }
+                    # Skip per-event crop JPEG on the capture thread.
+                    # Track-based counting emits far more events than tripwires;
+                    # sync imencode here was stealing GPU/CPU from detection FPS.
                     crop_data: list[tuple[str, int, str, str, float, list[float] | None, bytes | None]] = []
                     for cx in crossings:
                         track_id = cx.get("track_id")
@@ -919,19 +1194,6 @@ def _start_pipeline(
                                 bbox = list(state_bbox)
                                 if roi is not None:
                                     bbox = roi.to_original(bbox, _original_frame_w, _original_frame_h)
-                        crop_bytes: bytes | None = None
-                        if bbox is not None:
-                            try:
-                                x1, y1, x2, y2 = [int(v) for v in bbox]
-                                h, w = pipeline_frame.shape[:2]
-                                x1, y1 = max(0, x1), max(0, y1)
-                                x2, y2 = min(w, x2), min(h, y2)
-                                if x2 > x1 and y2 > y1:
-                                    crop = pipeline_frame[y1:y2, x1:x2]
-                                    _, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                                    crop_bytes = encoded.tobytes()
-                            except Exception:
-                                crop_bytes = None
                         crop_data.append((
                             cx.get("lane_id", "unknown"),
                             cx.get("track_id", -1),
@@ -939,15 +1201,21 @@ def _start_pipeline(
                             cx.get("direction", ""),
                             cx.get("confidence", 0.0),
                             bbox,
-                            crop_bytes,
+                            None,  # no crop_bytes in hot path
                         ))
 
                     # 5. Annotate + encode only when someone is watching MJPEG.
                     # always_on detection still runs above so fleet data stays fresh
                     # without paying full annotate/JPEG cost per headless camera.
+                    # Re-read connections each frame — browser may attach mid-loop.
+                    viewers = int(stream_meta.get("connections", 0) or 0)
                     if viewers > 0:
                         t_annotate = time.perf_counter()
-                        annotated = _annotate(pipeline_frame, display_det, lanes)
+                        try:
+                            annotated = _annotate(pipeline_frame, display_det, lanes)
+                        except Exception:
+                            logger.exception("Annotate failed for %s — raw frame fallback", camera_id)
+                            annotated = pipeline_frame
                         _log_timing(
                             camera_id, "annotate",
                             (time.perf_counter() - t_annotate) * 1000,
@@ -980,8 +1248,7 @@ def _start_pipeline(
                     # ── Session vehicle types from raw track detections ──
                     # Count each track_id once using the class_name emitted by
                     # the detector/tracker. This powers Live → Vehicle Types
-                    # even when no counting line is configured (so DB crossing
-                    # events / count_event never fire).
+                    # Session unique-track tallies (always-on headless).
                     for track in det.get("frame_tracks") or det.get("tracks") or []:
                         tid = track.get("track_id")
                         cls = str(track.get("class_name") or "").strip().lower()
@@ -1084,22 +1351,10 @@ def _start_pipeline(
 def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.ndarray:
     canvas = frame  # annotate in-place — saves ~6 MB copy per frame
     lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
+    # Track-lane count events (no tripwire geometry). Used only for HUD flash text.
+    crossings = det.get("crossings") or []
 
-    crossings = det.get("crossings", [])
-    for lane in lanes:
-        cl = lane.get("counting_line")
-        if cl:
-            sx, sy = cl["start"]
-            ex, ey = cl["end"]
-            line_id = f"{lane['id']}_count"
-            flashed = any(c.get("line_id") == line_id for c in crossings)
-            color = (255, 255, 255) if flashed else (0, 220, 255)
-            cv2.line(canvas, (int(sx), int(sy)), (int(ex), int(ey)), color, 3)
-            cv2.putText(canvas, line_id, (int(sx) + 5, int(sy) - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
-            cv2.putText(canvas, line_id, (int(sx) + 5, int(sy) - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
+    # Counting is track+lane based — do not draw tripwire counting lines.
     for lane_data in lanes:
         lane_color = color_for_lane(lane_data["id"], lane_colors)
         pts = np.array(lane_data["points"], dtype=np.int32).reshape((-1, 1, 2))
@@ -1160,6 +1415,18 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
     return canvas
 
 
+def _mjpeg_placeholder_jpeg(label: str = "WAITING FOR FRAMES") -> bytes:
+    blank = np.zeros((540, 960, 3), dtype=np.uint8)
+    cv2.putText(
+        blank, label,
+        (max(40, 960 // 8), 540 // 2),
+        cv2.FONT_HERSHEY_SIMPLEX, 1.2,
+        (140, 140, 140), 2,
+    )
+    ok, enc = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    return enc.tobytes() if ok else b""
+
+
 def _mjpeg_generator(
     camera_id: str,
     queue: Queue,
@@ -1171,15 +1438,18 @@ def _mjpeg_generator(
     Pacing is owned by the encode worker (stable preview FPS at full source
     resolution). This generator emits every queued JPEG without dropping —
     extra rate-limiting here was a major source of output FPS jitter.
+
+    Always yields *something* within ~1s so the browser <img> can decode a
+    first frame (Chrome often never fires onload for empty multipart streams).
     """
     from tf_common.monitoring.live_metrics import record_output_frame
 
     # Poll slightly faster than preview target so the queue never backs up.
     poll = min(0.5, 1.0 / max(fps * 2.0, 2.0))
+    gen_start = time.monotonic()
     last_fresh = 0.0
     last_stall_emit = 0.0
-    # Pre-compute a "NO SIGNAL" placeholder (encoded once, reused on stalls).
-    _no_signal: bytes | None = None
+    stall_jpeg: bytes | None = None
 
     try:
         while stop_event is None or not stop_event.is_set():
@@ -1190,21 +1460,28 @@ def _mjpeg_generator(
 
             now = time.monotonic()
             if jpeg_bytes is None:
-                if last_fresh and (now - last_fresh) >= 2.0 and (now - last_stall_emit) >= 1.0:
-                    if _no_signal is None:
-                        blank = np.zeros((540, 960, 3), dtype=np.uint8)
-                        cv2.putText(blank, "NO SIGNAL",
-                                    (960 // 4, 540 // 2),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1.5,
-                                    (100, 100, 100), 3)
-                        _, enc = cv2.imencode(".jpg", blank,
-                                              [cv2.IMWRITE_JPEG_QUALITY, 60])
-                        _no_signal = enc.tobytes()
-                    last_stall_emit = now
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + _no_signal + b"\r\n"
-                    )
+                # Emit placeholder when: never received a frame (last_fresh==0) after
+                # 0.8s, OR stale for >=2s. Previously `if last_fresh and ...` never
+                # fired on a cold start → browser sat on a black empty multipart.
+                never_got_frame = last_fresh <= 0.0 and (now - gen_start) >= 0.8
+                went_stale = last_fresh > 0.0 and (now - last_fresh) >= 2.0
+                if (never_got_frame or went_stale) and (now - last_stall_emit) >= 1.0:
+                    # Prefer last camera snapshot over synthetic "NO SIGNAL".
+                    snap = _last_snapshots.get(camera_id)
+                    if snap is not None and snap[0]:
+                        stall_bytes = snap[0]
+                    else:
+                        if stall_jpeg is None:
+                            stall_jpeg = _mjpeg_placeholder_jpeg(
+                                "STARTING STREAM..." if last_fresh <= 0.0 else "NO SIGNAL"
+                            )
+                        stall_bytes = stall_jpeg
+                    if stall_bytes:
+                        last_stall_emit = now
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n\r\n" + stall_bytes + b"\r\n"
+                        )
                 continue
 
             last_fresh = now
@@ -1279,39 +1556,32 @@ async def reload_live_pipeline(
 async def live_fleet_status(_user: dict = Depends(get_current_user)):
     """Fleet overview of always-on / live detection pipelines.
 
-    Used by Dashboard and ops to confirm cameras are feeding realtime data
-    without opening Live Monitoring.
+    Used by Dashboard, Cameras page toggles, and ops to confirm which cameras
+    are feeding realtime data without opening Live Monitoring.
     """
-    from tf_common.monitoring.live_metrics import get_camera_metrics
+    return live_status_snapshot()
 
-    configured = list_configured_camera_ids()
-    cameras: list[dict[str, Any]] = []
-    with _lock:
-        for camera_id in configured:
-            stream = _streams.get(camera_id)
-            meta = stream[2] if stream is not None else {}
-            metrics = get_camera_metrics(camera_id)
-            cameras.append({
-                "camera_id": camera_id,
-                "running": stream is not None,
-                "always_on": bool(meta.get("always_on")),
-                "viewers": int(meta.get("connections") or 0),
-                "status": metrics.get("status"),
-                "process_fps": metrics.get("process_fps") or metrics.get("fps") or 0,
-                "output_fps": metrics.get("output_fps") or 0,
-                "vehicle_types": dict(meta.get("vehicle_types") or {}),
-                "occupancy": dict(meta.get("occupancy") or {}),
-                "error": metrics.get("error"),
-            })
-    running = sum(1 for c in cameras if c["running"])
-    return {
-        "auto_start_enabled": _env_auto_start_live(),
-        "supervisor_interval_sec": _SUPERVISOR_INTERVAL_SEC,
-        "configured": len(configured),
-        "running": running,
-        "always_on": sum(1 for c in cameras if c["always_on"]),
-        "cameras": cameras,
-    }
+
+@router.post("/live/always-on")
+async def set_live_always_on_fleet(
+    body: AlwaysOnToggleBody,
+    _user: dict = Depends(require_operator),
+):
+    """Enable/disable always-on detection for the whole fleet (operator)."""
+    # Starting/stopping pipelines is blocking (YOLO open, thread join) —
+    # run off the event loop so /api/health stays responsive.
+    return await run_in_threadpool(set_fleet_always_on, body.enabled)
+
+
+@router.post("/live/{camera_id}/always-on")
+async def set_live_always_on_camera(
+    camera_id: str,
+    body: AlwaysOnToggleBody,
+    _user: dict = Depends(require_operator),
+):
+    """Enable/disable always-on detection for one camera (operator)."""
+    validate_identifier(camera_id, name="camera_id")
+    return await run_in_threadpool(set_camera_always_on, camera_id, body.enabled)
 
 
 @router.get("/live/{camera_id}/metrics")

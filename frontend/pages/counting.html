@@ -1,8 +1,28 @@
-    <div id="page-content-counting" class="tab-content hidden space-y-6">
+    <div id="page-content-counting" class="tab-content hidden space-y-5">
+        <!-- Readiness / realtime status -->
+        <div id="counting-readiness" class="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+                <span id="counting-live-dot" class="w-2.5 h-2.5 rounded-full bg-slate-600 flex-shrink-0"></span>
+                <div class="min-w-0">
+                    <p id="counting-readiness-title" class="text-sm font-semibold text-slate-200">Select a camera</p>
+                    <p id="counting-readiness-sub" class="text-[11px] text-slate-500 truncate">Counts from detect+track+lane · Live session from always-on pipeline</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 text-[11px] flex-wrap">
+                <span id="counting-rt-badge" class="px-2 py-1 rounded-md border border-slate-700 bg-slate-950 text-slate-400">Realtime off</span>
+                <span id="counting-updated" class="text-slate-600">—</span>
+                <button type="button" onclick="switchTab('lanes')" class="text-indigo-400 hover:text-indigo-300">Lane Config →</button>
+            </div>
+        </div>
+
+        <!-- Filter -->
         <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-5">
             <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <h3 class="text-sm font-bold text-white">Operational count filter</h3>
-                <a href="#" onclick="switchTab('reports'); return false;" class="text-xs text-indigo-400 hover:text-indigo-300">Open period report &amp; heatmap →</a>
+                <div class="flex gap-3 text-xs">
+                    <a href="#" onclick="switchTab('live'); return false;" class="text-indigo-400 hover:text-indigo-300">Open Live →</a>
+                    <a href="#" onclick="switchTab('reports'); return false;" class="text-indigo-400 hover:text-indigo-300">Period report →</a>
+                </div>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
                 <div>
@@ -33,81 +53,118 @@
                         <option value="bus">Bus</option>
                     </select>
                 </div>
-                <button onclick="applyCountingFilter()" class="flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+                <button type="button" onclick="applyCountingFilter()" class="flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
                     <i data-lucide="search" class="h-4 w-4"></i> Apply
                 </button>
             </div>
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="counting-kpi-row">
-            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
-                <p class="text-xs text-slate-500 mb-1">Total</p>
-                <p class="text-2xl font-extrabold text-white" id="count-total">—</p>
+        <!-- Dual KPI: official crossings vs live session -->
+        <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3" id="counting-kpi-row">
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Track counts</p>
+                <p class="text-xl font-extrabold text-white" id="count-total">—</p>
+                <p class="text-[10px] text-slate-600 mt-0.5">Official (DB · lane assign)</p>
             </div>
-            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
-                <p class="text-xs text-slate-500 mb-1">Cars</p>
-                <p class="text-2xl font-extrabold text-indigo-400" id="count-cars">—</p>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Rate</p>
+                <p class="text-xl font-extrabold text-cyan-400" id="count-rate">—</p>
+                <p class="text-[10px] text-slate-600 mt-0.5">veh / hour</p>
             </div>
-            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
-                <p class="text-xs text-slate-500 mb-1">Motorcycles</p>
-                <p class="text-2xl font-extrabold text-emerald-400" id="count-motos">—</p>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Forward</p>
+                <p class="text-xl font-extrabold text-indigo-400" id="count-fwd">—</p>
             </div>
-            <div class="kpi-card border border-slate-800 rounded-xl p-4 text-center">
-                <p class="text-xs text-slate-500 mb-1">Trucks / Buses</p>
-                <p class="text-2xl font-extrabold text-amber-400" id="count-heavy">—</p>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Backward</p>
+                <p class="text-xl font-extrabold text-violet-400" id="count-bwd">—</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Cars</p>
+                <p class="text-xl font-extrabold text-indigo-300" id="count-cars">—</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center">
+                <p class="text-[10px] text-slate-500 mb-1 uppercase">Motos</p>
+                <p class="text-xl font-extrabold text-emerald-400" id="count-motos">—</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center border-cyan-500/20">
+                <p class="text-[10px] text-cyan-500/80 mb-1 uppercase">Live tracks</p>
+                <p class="text-xl font-extrabold text-cyan-300" id="count-live-tracks">—</p>
+                <p class="text-[10px] text-slate-600 mt-0.5">Session (not line)</p>
+            </div>
+            <div class="kpi-card border border-slate-800 rounded-xl p-3 text-center border-cyan-500/20">
+                <p class="text-[10px] text-cyan-500/80 mb-1 uppercase">In lanes now</p>
+                <p class="text-xl font-extrabold text-cyan-300" id="count-live-occ">—</p>
+                <p class="text-[10px] text-slate-600 mt-0.5" id="count-live-fps">— fps</p>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-base font-bold text-white">Count by Lane</h3>
-                    <button onclick="exportCountingCSV()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-700 bg-slate-900 hover:border-slate-600 text-slate-300" title="Export full period report CSV">
-                        <i data-lucide="download" class="h-3.5 w-3.5"></i> Export CSV
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Count by lane -->
+            <div class="lg:col-span-1 bg-slate-900/40 border border-slate-800 rounded-xl p-5">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-sm font-bold text-white">Count by Lane</h3>
+                    <button type="button" onclick="exportCountingCSV()" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-slate-700 bg-slate-900 hover:border-slate-600 text-slate-300">
+                        <i data-lucide="download" class="h-3.5 w-3.5"></i> CSV
                     </button>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="overflow-x-auto max-h-80">
                     <table class="w-full text-sm text-left text-slate-400">
-                        <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800 sticky top-0">
+                        <thead class="text-[10px] uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800 sticky top-0">
                             <tr>
-                                <th class="px-3 py-3 font-semibold">Lane</th>
-                                <th class="px-3 py-3 font-semibold">Cars</th>
-                                <th class="px-3 py-3 font-semibold">Motos</th>
-                                <th class="px-3 py-3 font-semibold">Trucks</th>
-                                <th class="px-3 py-3 font-semibold">Buses</th>
-                                <th class="px-3 py-3 font-semibold">Total</th>
+                                <th class="px-2 py-2 font-semibold">Lane</th>
+                                <th class="px-2 py-2 font-semibold">Cars</th>
+                                <th class="px-2 py-2 font-semibold">Moto</th>
+                                <th class="px-2 py-2 font-semibold">Hvy</th>
+                                <th class="px-2 py-2 font-semibold">Fwd</th>
+                                <th class="px-2 py-2 font-semibold">Bwd</th>
+                                <th class="px-2 py-2 font-semibold">Tot</th>
                             </tr>
                         </thead>
                         <tbody id="counting-table-body">
-                            <tr><td colspan="6" class="px-3 py-8 text-center text-slate-600 text-sm">Select a camera to view lane counts</td></tr>
+                            <tr><td colspan="7" class="px-3 py-8 text-center text-slate-600 text-sm">Select a camera</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
-                <div class="flex justify-between items-center mb-4">
-                    <div>
-                        <h3 class="text-base font-bold text-white">Recent line crossings</h3>
-                        <p class="text-xs text-slate-500 mt-0.5">Latest count events (not lane-changes). Requires counting lines.</p>
-                    </div>
-                    <a href="#" onclick="switchTab('events'); return false;" class="text-xs text-indigo-400 hover:text-indigo-300">Full event log →</a>
+            <!-- Mini chart + live class chips -->
+            <div class="lg:col-span-1 bg-slate-900/40 border border-slate-800 rounded-xl p-5">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-sm font-bold text-white">Crossings in window</h3>
+                    <span id="counting-chart-source" class="text-[10px] text-slate-500">hourly</span>
                 </div>
-                <div class="overflow-x-auto max-h-96">
+                <div id="chart-counting-hourly" class="h-44"></div>
+                <div class="mt-3 border-t border-slate-800 pt-3">
+                    <p class="text-[10px] text-slate-500 uppercase font-semibold mb-2">Live session classes</p>
+                    <div id="counting-live-types" class="flex flex-wrap gap-1.5">
+                        <span class="text-[11px] text-slate-600">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent crossings (realtime feed) -->
+            <div class="lg:col-span-1 bg-slate-900/40 border border-slate-800 rounded-xl p-5">
+                <div class="flex justify-between items-center mb-3">
+                    <div>
+                        <h3 class="text-sm font-bold text-white">Recent track counts</h3>
+                        <p class="text-[10px] text-slate-500 mt-0.5">Detect+track+lane · auto-refresh 3s</p>
+                    </div>
+                    <a href="#" onclick="switchTab('events'); return false;" class="text-[11px] text-indigo-400 hover:text-indigo-300">Full log →</a>
+                </div>
+                <div class="overflow-x-auto max-h-80">
                     <table class="w-full text-sm text-left text-slate-400">
-                        <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800 sticky top-0">
+                        <thead class="text-[10px] uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800 sticky top-0">
                             <tr>
-                                <th class="px-3 py-3 font-semibold">Track</th>
-                                <th class="px-3 py-3 font-semibold">Class</th>
-                                <th class="px-3 py-3 font-semibold">Lane</th>
-                                <th class="px-3 py-3 font-semibold">Dir</th>
-                                <th class="px-3 py-3 font-semibold">Conf</th>
-                                <th class="px-3 py-3 font-semibold">Frame</th>
-                                <th class="px-3 py-3 font-semibold">Time</th>
+                                <th class="px-2 py-2 font-semibold">Track</th>
+                                <th class="px-2 py-2 font-semibold">Class</th>
+                                <th class="px-2 py-2 font-semibold">Lane</th>
+                                <th class="px-2 py-2 font-semibold">Dir</th>
+                                <th class="px-2 py-2 font-semibold">Time</th>
                             </tr>
                         </thead>
                         <tbody id="counting-recent-tbody">
-                            <tr><td colspan="7" class="px-3 py-8 text-center text-slate-600 text-sm">Select a camera</td></tr>
+                            <tr><td colspan="5" class="px-3 py-8 text-center text-slate-600 text-sm">Select a camera</td></tr>
                         </tbody>
                     </table>
                 </div>

@@ -302,7 +302,9 @@ class StorageWorker:
                 # Batch commit every 50 events — prevents commit-per-event
                 # bottleneck (~200 tps → ~200 write-xacts/sec would saturate
                 # SQLite WAL at ~100 tps).
-                if commit_counter >= 50 and self.adapter is not None:
+                # Commit every few events so Vehicle Counting (3s poll) stays fresh
+                # under multi-camera SQLite writers (serialized via db_write_lock).
+                if commit_counter >= 3 and self.adapter is not None:
                     try:
                         self.adapter.events.commit()
                         self.adapter.aggregates.commit()
@@ -316,9 +318,12 @@ class StorageWorker:
                 if callable(rollback):
                     with contextlib.suppress(Exception):
                         rollback()
+                # Log message once with detail — OperationalError (sqlite locked)
+                # was previously silent and made Vehicle Counting look empty.
                 logger.warning(
-                    "StorageWorker: error processing event (%s) — dropping",
+                    "StorageWorker: error processing event (%s) — dropping: %s",
                     type(exc).__name__,
+                    exc,
                 )
 
         # Final commit before draining

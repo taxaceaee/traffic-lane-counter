@@ -69,7 +69,9 @@ class SqlEventRepository:
         self.session.flush()
 
     def commit(self) -> None:
-        self.session.commit()
+        from tf_db.session import commit_with_retry
+
+        commit_with_retry(self.session)
 
 
 class SqlJobRepository:
@@ -140,7 +142,9 @@ class SqlAggregateRepository:
         self.session.flush()
 
     def commit(self) -> None:
-        self.session.commit()
+        from tf_db.session import commit_with_retry
+
+        commit_with_retry(self.session)
 
     def upsert_buckets(
         self,

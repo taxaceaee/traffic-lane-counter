@@ -74,22 +74,60 @@ function tabFromPath(pathname) {
 
 // ── Page loading ──────────────────────────────────────────────────────────
 
+// In-memory HTML cache so tab switches stay instant even if the API is busy.
+const _pageHtmlCache = Object.create(null);
+
 async function loadPage(tabId) {
     const container = document.getElementById('page-content-area');
     if (!container) return;
-    // Remove cached content so fresh HTML always loads
+
+    // Already in DOM — keep it (do not blank the UI while re-fetching).
     const existing = document.getElementById('page-content-' + tabId);
-    if (existing) existing.remove();
-    _loadedPages.delete(tabId);
-    try {
-        const htmlResp = await fetch(`pages/${tabId}.html`);
-        if (!htmlResp.ok) throw new Error('HTTP ' + htmlResp.status);
-        const html = await htmlResp.text();
+    if (existing) {
+        _loadedPages.add(tabId);
+        return;
+    }
+
+    const inject = (html) => {
+        // Guard: never inject duplicate root nodes.
+        if (document.getElementById('page-content-' + tabId)) return;
         container.insertAdjacentHTML('beforeend', html);
         _loadedPages.add(tabId);
-        lucide.createIcons();
+        try { lucide.createIcons(); } catch (_) { /* ignore */ }
+    };
+
+    // Prefer memory cache (survives DOM wipe of other tabs, not this one).
+    if (_pageHtmlCache[tabId]) {
+        inject(_pageHtmlCache[tabId]);
+        return;
+    }
+
+    try {
+        const htmlResp = await fetch(`pages/${tabId}.html`, { cache: 'no-cache' });
+        if (!htmlResp.ok) throw new Error('HTTP ' + htmlResp.status);
+        const html = await htmlResp.text();
+        if (!html || !html.includes('page-content-' + tabId)) {
+            throw new Error('Invalid page markup for ' + tabId);
+        }
+        _pageHtmlCache[tabId] = html;
+        inject(html);
     } catch (e) {
         console.warn(`Failed to load page "${tabId}":`, e);
+        // Placeholder so the content area is never a black void.
+        if (!document.getElementById('page-content-' + tabId)) {
+            container.insertAdjacentHTML(
+                'beforeend',
+                `<div id="page-content-${tabId}" class="tab-content space-y-4">
+                    <div class="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6 text-center">
+                        <p class="text-sm font-semibold text-rose-300">Failed to load this page</p>
+                        <p class="text-xs text-slate-500 mt-1">${String(e && e.message ? e.message : e)}</p>
+                        <button type="button" onclick="delete _pageHtmlCache['${tabId}']; _loadedPages.delete('${tabId}'); switchTab('${tabId}')"
+                            class="mt-3 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white">Retry</button>
+                    </div>
+                </div>`,
+            );
+            _loadedPages.add(tabId);
+        }
     }
 }
 
@@ -209,21 +247,23 @@ async function switchTab(tabId) {
     }
     if (tabId === 'health') { startHealthPolling(); }
     else { stopHealthPolling(); }
-    if (tabId === 'counting') { applyCountingFilter(); }
+    if (tabId === 'counting') {
+        startCountingPolling();
+    } else {
+        stopCountingPolling();
+    }
     if (tabId === 'reports') { loadReportsData(); }
     if (tabId === 'events') { loadEventsData(); }
     if (tabId === 'settings') { loadSettings(); }
     if (tabId === 'users') { loadCurrentUserRole(); loadUsersData(); loadAuditData(); }
     if (tabId === 'live') {
-        // loadLiveCameraData is already called by refreshData() on first visit.
-        // For re-visits (isNewPage=false), refreshData() is skipped so we call it here.
-        if (!isNewPage) {
-            if (camerasList.length) {
-                populateSelectors();
-                loadLiveCameraData();
-            } else {
-                await refreshData();
-            }
+        // Always hydrate Live after the page root exists (never leave a blank pane).
+        if (camerasList.length) {
+            populateSelectors();
+            if (typeof loadLiveCameraData === 'function') loadLiveCameraData();
+        } else if (!isNewPage) {
+            // First visit runs refreshData() above; re-visits may need a soft refill.
+            try { await refreshData(); } catch (_) { /* offline toast only */ }
         }
     }
     if (tabId === 'lanes') {
@@ -231,15 +271,20 @@ async function switchTab(tabId) {
         if (!camerasList.length) await refreshData();
         loadLanesConfigEditor();
     }
+    if (tabId === 'cameras') {
+        if (!camerasList.length) await refreshData();
+        if (typeof loadAlwaysOnStatus === 'function') await loadAlwaysOnStatus();
+        if (typeof renderCamerasGrid === 'function') renderCamerasGrid();
+    }
 }
 
 function updatePageHeader(tabId) {
     const headers = {
         dashboard: ["Dashboard", "Fleet ops — live cameras, lane occupancy, class mix, and infrastructure."],
         live:      ["Live Monitoring", "Real-time annotated video, lane occupancy, and AI inference metrics."],
-        counting:  ["Vehicle Counting", "Filter counts by camera, time, and type. Review recent line crossings."],
+        counting:  ["Vehicle Counting", "Realtime track+lane counts, direction/rate, and live session tracks per camera."],
         alerts:    ["Alert System", "Active incidents, remediation steps, and alert history."],
-        cameras:   ["Camera Management", "Register sources, test connectivity, and open Live / Lanes."],
+        cameras:   ["Camera Management", "Sources, always-on toggles, connectivity, Live / Lanes."],
         lanes:     ["Lane Configuration", "Edit lane polygon coordinates and counting lines per camera."],
         jobs:      ["Inference Jobs", "Launch batch jobs, inspect progress, and open annotated video."],
         models:    ["Model Management", "YOLO weight registry — upload, rename, and remove models."],
@@ -260,8 +305,11 @@ function updatePageHeader(tabId) {
 async function apiRequest(path, options = {}) {
     try {
         const token = localStorage.getItem('access_token');
-        const headers = options.headers || {};
+        const headers = { ...(options.headers || {}) };
         if (token) headers['Authorization'] = 'Bearer ' + token;
+        if (options.body && !headers['Content-Type'] && !headers['content-type']) {
+            headers['Content-Type'] = 'application/json';
+        }
         const res = await fetch(BASE_URL + path, { ...options, headers });
 
         if (res.status === 401 && token) {
@@ -423,19 +471,20 @@ async function fullRefresh() {
 // ── Connection Error UI ─────────────────────────────────────────────────
 
 function showConnectionError() {
-    const area = document.getElementById('page-content-area');
-    if (!area) return;
-    area.innerHTML = `
-        <div class="flex flex-col items-center justify-center py-20">
-            <i data-lucide="wifi-off" class="h-16 w-16 text-rose-500 mb-4"></i>
-            <h2 class="text-xl font-bold text-white mb-2">Connection Lost</h2>
-            <p class="text-slate-400 mb-6">Unable to reach the server at ${BASE_URL}</p>
-            <button onclick="fullRefresh()" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition-all">
-                Retry Connection
-            </button>
-        </div>
-    `;
-    lucide.createIcons();
+    // Never wipe page-content-area — that left Live/Dashboard as a black void
+    // when /api/readyz timed out under GPU load. Toast + badge only.
+    if (typeof showToast === 'function') {
+        showToast({
+            severity: 'critical',
+            title: 'Connection issue',
+            message: `Unable to reach API at ${BASE_URL}. Retry or refresh.`,
+        });
+    }
+    const connBadge = document.getElementById('conn-badge');
+    if (connBadge) {
+        connBadge.innerText = 'OFFLINE';
+        connBadge.className = 'text-[9px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20';
+    }
 }
 
 function showPartialError(msg) {

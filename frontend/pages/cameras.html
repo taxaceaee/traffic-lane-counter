@@ -1,9 +1,36 @@
     <div id="page-content-cameras" class="tab-content hidden space-y-6">
-        <div class="flex justify-between items-center">
-            <p class="text-sm text-slate-400">Manage and inspect registered camera sources.</p>
-            <button onclick="showAddCameraModal()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
+        <div class="flex flex-wrap justify-between items-center gap-3">
+            <p class="text-sm text-slate-400">Manage sources and always-on detection (FPS vs realtime data).</p>
+            <button type="button" onclick="showAddCameraModal()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all">
                 <i data-lucide="plus" class="h-4 w-4"></i> Add Camera
             </button>
         </div>
+
+        <!-- Fleet always-on toggle -->
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
+                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i data-lucide="radio" class="h-4 w-4 text-indigo-400"></i>
+                    Always-on detection (fleet)
+                </h3>
+                <p class="text-[11px] text-slate-500 mt-1">
+                    ON = continuous detect (Dashboard/Counting). OFF = free GPU; Live still on-demand.
+                    FPS auto-tunes detect-every-N + preview encode by number of active pipelines.
+                </p>
+                <p id="cameras-always-on-meta" class="text-[11px] text-slate-600 mt-1">Loading status…</p>
+                <p id="cameras-perf-tip" class="text-[11px] text-cyan-500/80 mt-1"></p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="cameras-always-on-label" class="text-xs font-semibold text-slate-400">—</span>
+                <button type="button" id="cameras-always-on-toggle"
+                    onclick="toggleFleetAlwaysOn()"
+                    class="relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 bg-slate-700"
+                    role="switch" aria-checked="false" title="Toggle fleet always-on">
+                    <span id="cameras-always-on-knob"
+                        class="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition duration-200 translate-x-0"></span>
+                </button>
+            </div>
+        </div>
+
         <div id="cameras-grid" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
     </div>

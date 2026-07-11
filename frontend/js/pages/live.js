@@ -475,6 +475,7 @@ function _showSnapshot(container, cameraId) {
 // error response (404/500), which triggers img onerror → fallback.
 
 let _mjpegRetryTimer = null;
+let _mjpegHealthTimer = null;
 let _streamHealthTimer = null;
 let _mjpegCameraId = null;
 let _mjpegStreamGeneration = 0;
@@ -486,6 +487,8 @@ let _mjpegStreamGeneration = 0;
 function _stopMJPEGStream() {
     clearTimeout(_mjpegRetryTimer);
     _mjpegRetryTimer = null;
+    clearInterval(_mjpegHealthTimer);
+    _mjpegHealthTimer = null;
     const img = document.querySelector('#live-mjpeg-img');
     if (img) {
         img.onload = null;
@@ -561,44 +564,83 @@ async function _startMJPEGStream(cameraId) {
     liveImg.dataset.streamLoaded = 'false';
     liveImg.onerror = () => {
         if (_mjpegCameraId === cameraId && streamGeneration === _mjpegStreamGeneration) {
-            _showStreamError(cameraId, container);
+            _showStreamError(cameraId, container, 'Stream connection failed');
         }
     };
-    liveImg.onload = () => {
-        if (_mjpegCameraId === cameraId && streamGeneration === _mjpegStreamGeneration) {
-            liveImg.dataset.streamLoaded = 'true';
-            clearTimeout(_mjpegRetryTimer);
-            _mjpegRetryTimer = null;
-        }
+    // Chrome often does NOT fire onload for multipart/x-mixed-replace MJPEG.
+    // Treat naturalWidth > 0 as success; also poll dimensions.
+    const markLoaded = () => {
+        if (_mjpegCameraId !== cameraId || streamGeneration !== _mjpegStreamGeneration) return;
+        liveImg.dataset.streamLoaded = 'true';
+        clearTimeout(_mjpegRetryTimer);
+        clearInterval(_mjpegHealthTimer);
+        _mjpegRetryTimer = null;
+        _mjpegHealthTimer = null;
     };
+    liveImg.onload = markLoaded;
 
     // Attach handlers before starting the request so a fast first response
     // cannot beat the load/error listeners.
     liveImg.src = liveUrl;
 
-    // Only fall back if no first MJPEG frame was received.  A healthy stream
-    // is left untouched indefinitely after its first successful decode.
+    // Poll decode status — more reliable than onload for MJPEG.
+    clearInterval(_mjpegHealthTimer);
+    _mjpegHealthTimer = setInterval(() => {
+        const img = container.querySelector('#live-mjpeg-img');
+        if (_mjpegCameraId !== cameraId || streamGeneration !== _mjpegStreamGeneration) {
+            clearInterval(_mjpegHealthTimer);
+            _mjpegHealthTimer = null;
+            return;
+        }
+        if (img && img.naturalWidth > 0) markLoaded();
+    }, 500);
+
+    // Only tear down if nothing decoded after a long wait AND metrics show no
+    // output. Do not kill a working MJPEG solely because onload never fired.
     clearTimeout(_mjpegRetryTimer);
-    _mjpegRetryTimer = setTimeout(() => {
+    _mjpegRetryTimer = setTimeout(async () => {
         const img = container.querySelector('#live-mjpeg-img');
         if (_mjpegCameraId !== cameraId
             || streamGeneration !== _mjpegStreamGeneration
             || !img
-            || img.dataset.streamLoaded === 'true') return;
-        _showStreamError(cameraId, container);
-    }, 10000);
+            || img.dataset.streamLoaded === 'true'
+            || img.naturalWidth > 0) return;
+        // If process_fps is healthy, keep waiting — encode may just be slow.
+        try {
+            const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
+            if (m && (Number(m.output_fps) > 0 || Number(m.process_fps) > 0)) {
+                // Extend grace: pipeline alive, frames may still arrive.
+                _mjpegRetryTimer = setTimeout(() => {
+                    const img2 = container.querySelector('#live-mjpeg-img');
+                    if (_mjpegCameraId === cameraId
+                        && streamGeneration === _mjpegStreamGeneration
+                        && img2
+                        && img2.dataset.streamLoaded !== 'true'
+                        && !(img2.naturalWidth > 0)) {
+                        _showStreamError(cameraId, container, 'No video frames yet');
+                    }
+                }, 15000);
+                return;
+            }
+        } catch (_) { /* fall through */ }
+        _showStreamError(cameraId, container, 'Stream: starting...');
+    }, 12000);
 }
 
-function _showStreamError(cameraId, container) {
+function _showStreamError(cameraId, container, message) {
     if (!container) container = document.getElementById('live-video-container');
     if (!container || _mjpegCameraId !== cameraId) return;
     clearTimeout(_mjpegRetryTimer);
+    clearInterval(_mjpegHealthTimer);
+    _mjpegRetryTimer = null;
+    _mjpegHealthTimer = null;
     _mjpegCameraId = null;
 
     // Clean broken img
     const img = container.querySelector('#live-mjpeg-img');
     if (img) { img.onerror = null; img.src = ''; img.remove(); }
 
+    const msg = message || 'Stream: starting...';
     // Show snapshot + error (Retry stays fixed overlay so zoom does not hide it)
     const snapshotUrl = BASE_URL + `/api/cameras/${cameraId}/snapshot`;
     _mountLiveVideoStage(
@@ -611,7 +653,7 @@ function _showStreamError(cameraId, container) {
               onerror="this.style.display='none'">`,
         `<div class="absolute bottom-3 left-3 z-10 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
             <i data-lucide="video-off" class="h-3.5 w-3.5 text-rose-400"></i>
-            <span class="text-xs text-rose-400">Stream: starting...</span>
+            <span class="text-xs text-rose-400">${escapeHtml(msg)}</span>
             <button type="button" onclick="loadLiveCameraData()" class="text-xs text-indigo-400 hover:text-indigo-300 ml-2">Retry</button>
         </div>`,
     );
