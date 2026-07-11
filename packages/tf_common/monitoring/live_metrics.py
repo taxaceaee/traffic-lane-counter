@@ -110,24 +110,6 @@ def _probe_memory_rss() -> float:
         return 0.0
 
 
-def _probe_cpu_pct() -> float:
-    """Return process CPU usage %."""
-    try:
-        import psutil
-        return psutil.Process(os.getpid()).cpu_percent(interval=0)
-    except Exception:
-        return 50.0
-
-
-def _probe_system_mem_pct() -> float:
-    """Return system memory usage %."""
-    try:
-        import psutil
-        return float(psutil.virtual_memory().percent)
-    except Exception:
-        return 50.0
-
-
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _trim_window(values: deque[float], now: float) -> None:

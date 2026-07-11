@@ -327,23 +327,11 @@ async def broadcast_raw(data: dict[str, Any]) -> None:
                 _ws_cameras.pop(id(ws), None)
 
 
-async def broadcast(camera_id: str, data: dict[str, Any]) -> None:
-    """Broadcast a message to all WS clients subscribed to a camera."""
-    await broadcast_raw({"camera_id": camera_id, **data})
-
-
 def broadcast_raw_sync(data: dict[str, Any]) -> None:
     """Synchronous convenience wrapper for raw broadcast payloads."""
     loop = _event_loop
     if loop is not None and loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_raw(data), loop)
-
-
-def broadcast_sync(camera_id: str, data: dict[str, Any]) -> None:
-    """Synchronous convenience wrapper for use from non-async contexts (e.g. threads)."""
-    loop = _event_loop
-    if loop is not None and loop.is_running():
-        asyncio.run_coroutine_threadsafe(broadcast(camera_id, data), loop)
 
 
 def get_connection_stats() -> dict[str, Any]:

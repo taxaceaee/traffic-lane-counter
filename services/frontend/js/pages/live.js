@@ -486,7 +486,6 @@ function _showSnapshot(container, cameraId) {
 
 let _mjpegRetryTimer = null;
 let _mjpegHealthTimer = null;
-let _streamHealthTimer = null;
 let _mjpegCameraId = null;
 let _mjpegStreamGeneration = 0;
 
@@ -804,10 +803,6 @@ function stopLiveMetricsPolling() {
     if (_liveMetricsTimer) {
         clearInterval(_liveMetricsTimer);
         _liveMetricsTimer = null;
-    }
-    if (_streamHealthTimer) {
-        clearInterval(_streamHealthTimer);
-        _streamHealthTimer = null;
     }
     if (_liveVisibilityHandler) {
         document.removeEventListener('visibilitychange', _liveVisibilityHandler);

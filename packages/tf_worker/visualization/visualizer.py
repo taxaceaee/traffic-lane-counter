@@ -25,14 +25,20 @@ class Visualizer:
         self.lanes = [Lane(ln["id"], ln["points"]) for ln in config.get("lanes", [])]
         self._lane_colors = build_lane_color_map([ln.id for ln in self.lanes])
 
-    def _draw_semi_transparent_rect(self, overlay: np.ndarray, img: np.ndarray, pt1: tuple[int, int], pt2: tuple[int, int], color: tuple[int, int, int], alpha: float = 0.5):
-        """Draws a filled rectangle with transparency onto a pre-created overlay."""
+    def _draw_semi_transparent_rect(
+        self,
+        overlay: np.ndarray,
+        pt1: tuple[int, int],
+        pt2: tuple[int, int],
+        color: tuple[int, int, int],
+    ) -> None:
+        """Fill a rectangle on a pre-created overlay (blended later via ``_apply_overlay``)."""
         cv2.rectangle(overlay, pt1, pt2, color, -1)
 
     def _apply_overlay(self, canvas: np.ndarray, overlay: np.ndarray, alpha: float):
         cv2.addWeighted(overlay, alpha, canvas, 1.0 - alpha, 0, canvas)
 
-    def _draw_counts_panel(self, canvas: np.ndarray, overlay: np.ndarray, line_counter, anchor_y: int):
+    def _draw_counts_panel(self, canvas: np.ndarray, line_counter, anchor_y: int):
         """Renders a COUNTS panel below the OCCUPANCY panel."""
         counts = line_counter.get_counts()
         if not counts:
@@ -46,7 +52,7 @@ class Visualizer:
         panel_h = header_h + len(lane_ids) * line_h + 10
 
         x, y = 15, anchor_y
-        self._draw_semi_transparent_rect(canvas, canvas, (x, y), (x + panel_w, y + panel_h), (20, 20, 20), alpha=0.75)
+        self._draw_semi_transparent_rect(canvas, (x, y), (x + panel_w, y + panel_h), (20, 20, 20))
         cv2.rectangle(canvas, (x, y), (x + panel_w, y + panel_h), (80, 80, 80), 1)
 
         cv2.putText(canvas, "COUNTS (fwd / bwd)", (x + 10, y + 20),
@@ -146,13 +152,13 @@ class Visualizer:
             tx1 = x1
             tx2 = min(x1 + tw + 6, canvas.shape[1])
 
-            self._draw_semi_transparent_rect(overlay, canvas, (tx1, ty1), (tx2, ty2), (30, 30, 30), alpha=0.7)
+            self._draw_semi_transparent_rect(overlay, (tx1, ty1), (tx2, ty2), (30, 30, 30))
             cv2.putText(canvas, label_text, (tx1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
 
         # 3. Draw On-Screen Occupancy Table
         panel_w = 200
         panel_h = 40 + (len(occupancy) * 25)
-        self._draw_semi_transparent_rect(overlay, canvas, (15, 15), (15 + panel_w, 15 + panel_h), (20, 20, 20), alpha=0.75)
+        self._draw_semi_transparent_rect(overlay, (15, 15), (15 + panel_w, 15 + panel_h), (20, 20, 20))
         cv2.rectangle(canvas, (15, 15), (15 + panel_w, 15 + panel_h), (80, 80, 80), 1)
 
         cv2.putText(canvas, "LANE OCCUPANCY", (25, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
@@ -170,6 +176,6 @@ class Visualizer:
         self._apply_overlay(canvas, overlay, alpha=0.5)
         if line_counter is not None:
             counts_panel_y = 15 + panel_h + 12
-            self._draw_counts_panel(canvas, np.full_like(canvas, 0, dtype=np.uint8), line_counter, counts_panel_y)
+            self._draw_counts_panel(canvas, line_counter, counts_panel_y)
 
         return canvas

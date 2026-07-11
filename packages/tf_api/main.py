@@ -58,10 +58,6 @@ _MEMORY_THRESHOLD = int(os.getenv("WORKER_MEMORY_THRESHOLD", "0"))
 _last_memory_warning = 0.0
 
 
-def get_api_key() -> str:
-    return API_KEY
-
-
 def _check_memory() -> str | None:
     """Return warning message if RSS exceeds threshold, else None."""
     if _MEMORY_THRESHOLD <= 0:

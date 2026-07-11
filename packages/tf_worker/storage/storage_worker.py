@@ -276,13 +276,11 @@ class StorageWorker:
                 self._dead_letter.append(payload)
 
     def _worker_loop(self) -> None:
-        commit_counter = 0
         while True:
             try:
                 item = self._queue.get(timeout=1.0)
             except Empty:
                 if self._stop.is_set():
-                    # Drain remaining items on stop
                     continue
                 continue
             if item is None:
@@ -298,9 +296,6 @@ class StorageWorker:
             try:
                 self._process(item)
                 self.total_processed += 1
-                # Commits happen inside _process under the process-wide SQLite
-                # write lock (multi-camera always-on would otherwise thrash WAL).
-                commit_counter = 0
             except Exception as exc:
                 self.total_errors += 1
                 self._append_dead_letter(item)
@@ -308,23 +303,13 @@ class StorageWorker:
                 if callable(rollback):
                     with contextlib.suppress(Exception):
                         rollback()
-                # Log message once with detail — OperationalError (sqlite locked)
-                # was previously silent and made Vehicle Counting look empty.
                 logger.warning(
                     "StorageWorker: error processing event (%s) — dropping: %s",
                     type(exc).__name__,
                     exc,
                 )
 
-        # Final commit before draining
-        if commit_counter > 0 and self.adapter is not None:
-            try:
-                self.adapter.events.commit()
-                self.adapter.aggregates.commit()
-            except Exception:
-                logger.warning("StorageWorker: final commit failed", exc_info=True)
-
-        # Drain remaining items
+        # Drain remaining items (each _process commits itself)
         while not self._queue.empty():
             try:
                 item = self._queue.get_nowait()
@@ -337,13 +322,7 @@ class StorageWorker:
             except Empty:
                 break
 
-        # Final commit for any remaining uncommitted rows
         if self.adapter is not None:
-            try:
-                self.adapter.events.commit()
-                self.adapter.aggregates.commit()
-            except Exception:
-                logger.warning("StorageWorker: drain commit failed", exc_info=True)
             with contextlib.suppress(Exception):
                 self.adapter.close()
 

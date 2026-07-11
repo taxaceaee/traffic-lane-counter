@@ -21,10 +21,6 @@ class TrackState:
         self.stable_lane: str | None = None
         self.consecutive_unknown_count = 0
 
-        # Per counting-line side memory (line_id -> +1 / -1).
-        # Sub-epsilon and zero are never stored. Instance attr (not class) on purpose.
-        self.last_side: dict[str, int] = {}
-
     def is_counted(self, current_frame_idx: int, min_age: int) -> bool:
         """Determines if the track satisfies minimum age and has a valid stable lane."""
         age = current_frame_idx - self.first_seen_frame + 1
@@ -54,27 +50,6 @@ class LaneStateManager:
 
         # Store lane changes triggered in the current frame update
         self.current_frame_events: list[dict[str, Any]] = []
-
-    # ------------------------------------------------------------------
-    # Counting-line side state API (accessed by LineCounter through these
-    # methods instead of mutating TrackState.last_side directly).
-    # ------------------------------------------------------------------
-
-    def get_last_side(self, track_id: int, line_id: str) -> int | None:
-        state = self.track_states.get(track_id)
-        if state is None:
-            return None
-        return state.last_side.get(line_id)
-
-    def update_last_side(self, track_id: int, line_id: str, side: int) -> None:
-        state = self.track_states.get(track_id)
-        if state is not None:
-            state.last_side[line_id] = side
-
-    def clear_last_side(self, track_id: int, line_id: str) -> None:
-        state = self.track_states.get(track_id)
-        if state is not None:
-            state.last_side.pop(line_id, None)
 
     def update(self, current_frame_idx: int, detected_tracks: list[dict[str, Any]], lane_assigner: LaneAssigner) -> list[dict[str, Any]]:
         """Updates the state of all tracked objects and identifies lane change events.

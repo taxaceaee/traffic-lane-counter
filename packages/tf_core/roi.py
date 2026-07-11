@@ -209,10 +209,6 @@ class CropROI:
 
         return [x1, y1, x2, y2]
 
-    def to_original_point(self, pt: tuple[float, float]) -> tuple[float, float]:
-        """Map a single point from crop space to original frame space."""
-        return (pt[0] + self.offset_x, pt[1] + self.offset_y)
-
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

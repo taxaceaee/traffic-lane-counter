@@ -603,45 +603,6 @@ class SqlLaneChangeRepository:
         self.session.flush()
 
 
-# ── MetricsRepository ──────────────────────────────────────────────────────────
-
-class SqlMetricsRepository:
-    """Query runtime metrics with time-windowing to avoid full-table scans."""
-
-    def __init__(self, session: Session):
-        self.session = session
-
-    def get_avg_fps(self, camera_id: str | None = None, window_hours: int = 24) -> float | None:
-        from datetime import timedelta
-
-        from tf_db.models import RuntimeMetric
-        q = self.session.query(RuntimeMetric.fps)
-        if camera_id:
-            q = q.filter(RuntimeMetric.camera_id == camera_id)
-        cutoff = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=window_hours)
-        q = q.filter(RuntimeMetric.created_at >= cutoff)
-        rows = q.all()
-        if not rows:
-            return None
-        vals = [r.fps for r in rows if r.fps is not None]
-        return sum(vals) / len(vals) if vals else None
-
-    def get_avg_latency(self, camera_id: str | None = None, window_hours: int = 24) -> float | None:
-        from datetime import timedelta
-
-        from tf_db.models import RuntimeMetric
-        q = self.session.query(RuntimeMetric.latency_ms)
-        if camera_id:
-            q = q.filter(RuntimeMetric.camera_id == camera_id)
-        cutoff = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=window_hours)
-        q = q.filter(RuntimeMetric.created_at >= cutoff)
-        rows = q.all()
-        if not rows:
-            return None
-        vals = [r.latency_ms for r in rows if r.latency_ms is not None]
-        return sum(vals) / len(vals) if vals else None
-
-
 # ── UserRepository ───────────────────────────────────────────────────────────
 
 class SqlUserRepository:
@@ -687,8 +648,8 @@ class SqlUserRepository:
             u.last_login = dt
             self.session.commit()
 
-    def revoke_tokens(self, username: str, dt: datetime) -> bool:
-        """Revoke all tokens issued before ``dt`` for one user."""
+    def revoke_tokens(self, username: str) -> bool:
+        """Bump token_version so existing access/refresh tokens fail validation."""
         u = self.session.query(User).filter(User.username == username).first()
         if not u:
             return False

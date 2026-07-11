@@ -231,9 +231,7 @@ async def logout(cred: HTTPAuthorizationCredentials | None = Depends(security)):
 
     session = SessionLocal()
     try:
-        if not SqlUserRepository(session).revoke_tokens(
-            user["sub"], datetime.now(timezone.utc)
-        ):
+        if not SqlUserRepository(session).revoke_tokens(user["sub"]):
             raise HTTPException(401, "User not found")
     finally:
         session.close()

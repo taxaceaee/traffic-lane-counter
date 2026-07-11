@@ -64,11 +64,6 @@ def _get_frame_size(camera_id: str) -> tuple[int, int]:
     return fs.get("width", 960), fs.get("height", 540)
 
 
-def _read_lanes_yaml(path: Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
 def _write_lanes_yaml_atomic(path: Path, data: dict) -> None:
     """Write lane YAML with atomic file replacement using a unique temp file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,19 +84,6 @@ def _write_lanes_yaml_atomic(path: Path, data: dict) -> None:
         lock_fh.close()
         with contextlib.suppress(OSError):
             tmp.unlink()
-
-
-def _acquire_lock(path: Path) -> Any:
-    """Acquire an exclusive lock on the lanes file. Returns the lock file handle."""
-    lock_path = path.with_suffix(".yaml.lock")
-    lock_fh = open(lock_path, "w")  # noqa: SIM115 - caller owns the lock handle
-    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-    return lock_fh
-
-
-def _release_lock(lock_fh: Any) -> None:
-    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-    lock_fh.close()
 
 
 @router.get("/{camera_id}/lanes")

@@ -10,7 +10,6 @@ import contextlib
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import cv2
 
@@ -122,30 +121,6 @@ class LocalCropStorage:
                 logger.warning("Could not delete %s: %s", fpath, exc.__class__.__name__)
         self._remove_empty_dirs(root)
         return deleted
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _extract_crop(self, frame: Any, bbox: list[float]) -> Any | None:
-        if frame is None or bbox is None:
-            return None
-        x1, y1, x2, y2 = [int(v) for v in bbox]
-        h, w = frame.shape[:2]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-        if x2 <= x1 or y2 <= y1:
-            return None
-
-        crop = frame[y1:y2, x1:x2]
-        ch, cw = crop.shape[:2]
-        scale = self.max_px / max(ch, cw)
-        if scale < 1.0:
-            crop = cv2.resize(
-                crop,
-                (max(1, int(cw * scale)), max(1, int(ch * scale))),
-            )
-        return crop
 
     @staticmethod
     def _remove_empty_dirs(root: Path) -> None:

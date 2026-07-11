@@ -35,7 +35,6 @@ cleanly — no server dependency loaded.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 

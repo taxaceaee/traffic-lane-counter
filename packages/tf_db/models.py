@@ -77,6 +77,12 @@ class LaneChangeEvent(Base):
 
 
 class RuntimeMetric(Base):
+    """Legacy table kept for Alembic schema compatibility.
+
+    Live FPS/latency now come from in-memory ``tf_common.monitoring.live_metrics``;
+    no runtime writer targets this table.
+    """
+
     __tablename__ = "runtime_metrics"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

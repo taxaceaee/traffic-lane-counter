@@ -122,14 +122,3 @@ def commit_with_retry(
 def SessionLocal() -> Session:
     """Create a new session bound to the current (cached) engine."""
     return sessionmaker(bind=get_engine(), autocommit=False, autoflush=False)()
-
-
-def get_session():
-    db = SessionLocal()
-    try:
-        yield db
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()

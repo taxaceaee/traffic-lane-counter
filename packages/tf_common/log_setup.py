@@ -60,8 +60,3 @@ def setup_logging() -> None:
     for h in root.handlers[:]:
         root.removeHandler(h)
     root.addHandler(handler)
-
-
-def get_logger(name: str) -> logging.Logger:
-    """Get a logger with structured extra field support."""
-    return logging.getLogger(name)

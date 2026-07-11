@@ -137,7 +137,7 @@ async def update_user(user_id: str, body: UpdateUserRequest,
             raise HTTPException(404, "User not found")
 
         if any(key in updates for key in ("role", "is_active", "password_hash")):
-            repo.revoke_tokens(old["username"], datetime.now(timezone.utc))
+            repo.revoke_tokens(old["username"])
 
         detail_parts = [f"{k}={v}" for k, v in updates.items() if k != "password_hash"]
         if "password_hash" in updates:

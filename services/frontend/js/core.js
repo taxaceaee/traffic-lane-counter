@@ -494,25 +494,6 @@ function showPartialError(msg) {
 
 // ── Shared helpers ──────────────────────────────────────────────────────
 
-async function downloadCSVLogs() {
-    const camera_id = document.getElementById('events-cam-select')?.value;
-    if (!camera_id) { showToast({severity:'warning', title:'No Camera', message:'Select a camera first to export real events.'}); return; }
-    const url = BASE_URL + `/api/cameras/${camera_id}/lane-changes?limit=10000`;
-    try {
-        const r = await fetch(url, {headers: {'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '')}});
-        if (!r.ok) { showToast({severity:'warning', title:'Export Failed', message:'HTTP ' + r.status}); return; }
-        const data = await r.json();
-        if (!data || !data.length) { showToast({severity:'info', title:'No Data', message:'No events to export.'}); return; }
-        let csv = 'event_id,camera_id,track_id,class_name,from_lane,to_lane,frame_id\n';
-        data.forEach(e => { csv += e.id + ',' + e.camera_id + ',' + e.track_id + ',' + (e.class_name||'') + ',' + (e.previous_lane_id||'') + ',' + (e.current_lane_id||'') + ',' + e.frame_id + '\n'; });
-        const blob = new Blob([csv], {type:'text/csv'});
-        const a = document.createElement('a');
-        a.href = window.URL.createObjectURL(blob);
-        a.download = camera_id + '_events_export.csv';
-        a.click();
-    } catch (e) { showToast({severity:'warning', title:'Export Error', message:e.message}); }
-}
-
 function showAddCameraModal() {
     if (typeof showAddCameraForm === 'function') {
         showAddCameraForm();

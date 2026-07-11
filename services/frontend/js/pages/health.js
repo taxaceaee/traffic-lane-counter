@@ -43,13 +43,6 @@ async function fetchHealthData() {
     updateHealthCamerasTable(cams);
 }
 
-function _badgeEl(text, isOk) {
-    const cls = isOk
-        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
-    return `<span class="px-2 py-0.5 rounded text-[10px] font-bold ${cls}">● ${text}</span>`;
-}
-
 function updateHealthKPIs(h, worker) {
     const apiBadge = document.getElementById('health-api-badge');
     apiBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
