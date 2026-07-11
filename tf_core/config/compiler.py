@@ -76,8 +76,11 @@ def compile_camera_config(
             "class_mode": model.class_mode,
             "allowed_classes": allowed_classes,
             "half": bool(torch.cuda.is_available()),
-            "detect_every_n_frames": 2,
+            # Keep aligned with settings_service / live defaults: detect every frame.
+            "detect_every_n_frames": 1,
+            "max_detections": 500,
             "roi_crop": True,
+            "roi_padding": 80,
         },
         "class_modes": CLASS_MODES,
         "tracking": {

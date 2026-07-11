@@ -21,13 +21,13 @@ class DetectConfig(BaseModel):
     class_mode: str = "coco_pretrained"
     allowed_classes: list[str] = []
     conf_threshold: float = 0.25
-    iou_threshold: float = 0.7
-    imgsz: int = 640
-    half: bool = False
+    iou_threshold: float = 0.45
+    imgsz: int = 1280
+    half: bool = True
     lanes: list[LaneConfig] = []
     tracker_config: str = "bytetrack.yaml"
     detect_every_n_frames: int = 1
-    min_track_age_frames: int = 3
+    min_track_age_frames: int = 2
     min_cross_distance_px: float = 2.0
 
 
@@ -91,11 +91,11 @@ class SessionInit(BaseModel):
     class_mode: str = "coco_pretrained"
     allowed_classes: list[str] = []
     conf_threshold: float = 0.25
-    iou_threshold: float = 0.7
-    imgsz: int = 640
-    half: bool = False
+    iou_threshold: float = 0.45
+    imgsz: int = 1280
+    half: bool = True
     lanes: list[LaneConfig] = []
     tracker_config: str = "bytetrack.yaml"
     detect_every_n_frames: int = 1
-    min_track_age_frames: int = 3
+    min_track_age_frames: int = 2
     min_cross_distance_px: float = 2.0

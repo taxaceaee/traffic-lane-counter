@@ -68,14 +68,17 @@ def load_and_validate_config(config_path: str | Path) -> dict[str, Any]:
     if not isinstance(detector, dict):
         raise ValueError("'detector' section must be a dictionary.")
 
-    # Defaults for detector
+    # Defaults for detector — keep in sync with tf_api settings_service defaults
+    # and live camera YAML (max recall + native-res friendly).
     detector.setdefault("weights", "weights/yolo11n.pt")
-    detector.setdefault("imgsz", 960)
+    detector.setdefault("imgsz", 1280)
     detector.setdefault("half", True)
-    detector.setdefault("detect_every_n_frames", 2)
+    detector.setdefault("detect_every_n_frames", 1)
+    detector.setdefault("max_detections", 500)
     detector.setdefault("roi_crop", True)
-    detector.setdefault("conf", 0.35)
-    detector.setdefault("iou", 0.5)
+    detector.setdefault("roi_padding", 80)
+    detector.setdefault("conf", 0.25)
+    detector.setdefault("iou", 0.45)
     detector.setdefault("class_mode", "coco_pretrained")
 
     if not isinstance(detector["weights"], str) or not detector["weights"]:
@@ -105,8 +108,8 @@ def load_and_validate_config(config_path: str | Path) -> dict[str, Any]:
         raise ValueError("'tracking' section must be a dictionary.")
 
     tracking.setdefault("tracker", "bytetrack.yaml")
-    tracking.setdefault("active_track_timeout_frames", 10)
-    tracking.setdefault("min_track_age_frames", 3)
+    tracking.setdefault("active_track_timeout_frames", 15)
+    tracking.setdefault("min_track_age_frames", 2)
 
     if not isinstance(tracking["tracker"], str) or not tracking["tracker"]:
         raise ValueError("tracking.tracker must be a non-empty string.")
