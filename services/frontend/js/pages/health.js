@@ -5,7 +5,9 @@ function stopHealthPolling() {
 function startHealthPolling() {
     stopHealthPolling();
     fetchHealthData();
-    _healthTimer = setInterval(fetchHealthData, 3000);
+    _healthTimer = setInterval(() => {
+        if (activeTab === 'health' && !document.hidden) fetchHealthData();
+    }, 8000);
 }
 
 async function fetchHealthData() {

@@ -19,23 +19,23 @@ _SETTINGS_PATH = Path("configs/settings.json")
 _DEFAULTS: dict[str, Any] = {
     "api_url": "http://localhost:8000",
     "detection": {
-        # Favor recall: detect every frame at native ROI resolution.
+        # Realtime defaults for multi-cam laptop GPUs (recall still high via
+        # LIVE_MAX_IMGSZ + ROI crop; cadence adapts via LIVE_RECALL_MODE=fps).
         "confidence": 0.25,
         "iou": 0.45,
-        "imgsz": 1280,
+        "imgsz": 960,
         "half": True,
         "detect_every_n_frames": 1,
         "tracker": "bytetrack",
         "track_buffer": 45,
-        "max_detections": 500,
+        "max_detections": 300,
         "roi_crop": True,
         "roi_padding": 80,
     },
-    # Live preview is always full source resolution; pace for smoothness.
-    # jpeg_quality/target_fps balance encode CPU vs Output FPS on laptop GPUs.
+    # Preview encode budget — keep Output FPS near Process FPS.
     "preview": {
-        "jpeg_quality": 72,
-        "target_fps": 20,
+        "jpeg_quality": 62,
+        "target_fps": 12,
         "preserve_source_resolution": True,
     },
     "storage": {

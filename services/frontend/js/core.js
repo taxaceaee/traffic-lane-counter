@@ -252,20 +252,21 @@ async function switchTab(tabId) {
     } else {
         stopCountingPolling();
     }
-    if (tabId === 'reports') { loadReportsData(); }
-    if (tabId === 'events') { loadEventsData(); }
-    if (tabId === 'settings') { loadSettings(); }
-    if (tabId === 'users') { loadCurrentUserRole(); loadUsersData(); loadAuditData(); }
+    // Live is expensive (MJPEG + YOLO encode slots) — tear down when leaving.
     if (tabId === 'live') {
-        // Always hydrate Live after the page root exists (never leave a blank pane).
         if (camerasList.length) {
             populateSelectors();
             if (typeof loadLiveCameraData === 'function') loadLiveCameraData();
         } else if (!isNewPage) {
-            // First visit runs refreshData() above; re-visits may need a soft refill.
             try { await refreshData(); } catch (_) { /* offline toast only */ }
         }
+    } else if (typeof stopLivePage === 'function') {
+        stopLivePage();
     }
+    if (tabId === 'reports') { loadReportsData(); }
+    if (tabId === 'events') { loadEventsData(); }
+    if (tabId === 'settings') { loadSettings(); }
+    if (tabId === 'users') { loadCurrentUserRole(); loadUsersData(); loadAuditData(); }
     if (tabId === 'lanes') {
         // Ensure cameras data is available even if page was cached
         if (!camerasList.length) await refreshData();

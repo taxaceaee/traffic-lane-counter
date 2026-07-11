@@ -110,50 +110,50 @@ def _count_active_pipelines() -> int:
 
 
 def recommended_detect_every_n(*, viewers: int, always_on: bool) -> int:
-    """YOLO cadence. Max-recall default: every frame (detect_every_n=1).
+    """YOLO cadence tuned for multi-cam realtime on laptop-class GPUs.
 
-    Env (optional):
-      ALWAYS_ON_DETECT_EVERY_N — headless cadence (default 1 = catch all vehicles)
-      LIVE_VIEWER_DETECT_EVERY_N — when a browser is watching (default 1)
-      LIVE_RECALL_MODE=fps — restore multi-cam FPS trade-off (every 2 when load≥3)
+    Default mode is *balanced* (LIVE_RECALL_MODE=fps):
+      - 1 viewer, light load → every frame
+      - ≥2–3 active pipelines → every 2nd frame (protect Process FPS)
+    Override with ALWAYS_ON_DETECT_EVERY_N / LIVE_VIEWER_DETECT_EVERY_N.
+    Set LIVE_RECALL_MODE=recall for max-recall every-frame (slower multi-cam).
     """
-    recall_fps = os.getenv("LIVE_RECALL_MODE", "recall").strip().lower() in {
-        "fps", "speed", "balanced",
-    }
+    mode = os.getenv("LIVE_RECALL_MODE", "fps").strip().lower()
+    balanced = mode in {"fps", "speed", "balanced", "realtime", ""}
     load = max(1, _count_active_pipelines())
     if viewers > 0:
         if os.getenv("LIVE_VIEWER_DETECT_EVERY_N"):
             return max(1, int(os.getenv("LIVE_VIEWER_DETECT_EVERY_N", "1")))
-        if recall_fps and load >= 3:
+        if balanced and load >= 3:
             return 2
         return 1
     if always_on:
         if os.getenv("ALWAYS_ON_DETECT_EVERY_N"):
-            return max(1, int(os.getenv("ALWAYS_ON_DETECT_EVERY_N", "1")))
-        if recall_fps and load >= 2:
+            return max(1, int(os.getenv("ALWAYS_ON_DETECT_EVERY_N", "2")))
+        if balanced and load >= 2:
             return 2
         return 1
     return 1
 
 
 def _live_max_imgsz() -> int:
-    """Cap YOLO imgsz. Default 0 = no cap (max recall). Set LIVE_MAX_IMGSZ=960 for FPS."""
-    raw = os.getenv("LIVE_MAX_IMGSZ", "0").strip()
+    """Cap YOLO imgsz for realtime. Default 960 (laptop multi-cam). 0 = no cap."""
+    raw = os.getenv("LIVE_MAX_IMGSZ", "960").strip()
     try:
         v = int(raw)
     except ValueError:
-        return 0
+        return 960
     return v  # 0 = no cap
 
 
 def _preview_encode_max_edge() -> int:
-    """Downscale MJPEG encode only (detection stays full ROI). 0 = no downscale."""
-    # Keep encode modest so Out FPS stays up while detection runs full quality.
-    raw = os.getenv("LIVE_PREVIEW_MAX_EDGE", "1280").strip()
+    """Downscale MJPEG encode only (detection stays ROI-sized). 0 = no downscale."""
+    # Encode is CPU-bound; keep edge modest so Output FPS tracks Process FPS.
+    raw = os.getenv("LIVE_PREVIEW_MAX_EDGE", "960").strip()
     try:
         return max(0, int(raw))
     except ValueError:
-        return 1280
+        return 960
 
 # Each stream holds: (DetectionCore, Queue, meta_dict, StorageWorker, session, stop_event)
 _streams: dict[str, tuple[DetectionCore, Queue, dict[str, Any], Any, Any, threading.Event]] = {}
@@ -163,14 +163,19 @@ _last_snapshots: dict[str, tuple[bytes, int, int, float]] = {}
 _perf_timings: dict[str, dict[str, float]] = {}
 _lock = threading.Lock()
 _last_cleanup = time.monotonic()
-_SNAPSHOT_REFRESH_SEC = 2.0
+_SNAPSHOT_REFRESH_SEC = 5.0  # snapshot is fallback UI only — keep encode off hot path
 _STREAM_TICKET_TTL = 60.0
 _stream_tickets: dict[str, tuple[str, float]] = {}
 
 
 def _log_timing(camera_id: str, label: str, duration_ms: float) -> None:
     """Accumulate pipeline timings that DetectionCore itself does not own."""
-    _perf_timings.setdefault(camera_id, {})[label] = duration_ms
+    # Single dict write per label; record_frame merges once per processed frame.
+    bucket = _perf_timings.get(camera_id)
+    if bucket is None:
+        _perf_timings[camera_id] = {label: duration_ms}
+    else:
+        bucket[label] = duration_ms
 
 
 def _update_snapshot(camera_id: str, frame: np.ndarray) -> None:
@@ -179,7 +184,8 @@ def _update_snapshot(camera_id: str, frame: np.ndarray) -> None:
     if cached is not None and (now - cached[3]) < _SNAPSHOT_REFRESH_SEC:
         return
     height, width = frame.shape[:2]
-    success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    # Cheap thumbnail — never compete with YOLO / MJPEG encode.
+    success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 55])
     if success:
         _last_snapshots[camera_id] = (jpeg.tobytes(), width, height, now)
 
@@ -824,14 +830,21 @@ def _start_pipeline(
     preview_defaults = get_preview_defaults()
     # Full source resolution is preserved; quality is tuned for encode speed so
     # Output FPS stays close to the preview target on laptop GPUs.
-    jpeg_quality = int(preview_defaults.get("jpeg_quality", 72))
-    # Encode can stay lighter; detection quality is independent.
-    if _count_active_pipelines() >= 2:
-        jpeg_quality = min(jpeg_quality, 70)
-    jpeg_quality = max(55, min(90, jpeg_quality))
-    preview_target_fps = float(preview_defaults.get("target_fps", 20) or 20)
-    preview_target_fps = max(8.0, min(30.0, preview_target_fps))
+    jpeg_quality = int(preview_defaults.get("jpeg_quality", 62))
+    # Multi-cam: drop encode cost first so Process FPS stays healthy.
+    load = _count_active_pipelines()
+    if load >= 2:
+        jpeg_quality = min(jpeg_quality, 60)
+    if load >= 3:
+        jpeg_quality = min(jpeg_quality, 55)
+    jpeg_quality = max(50, min(85, jpeg_quality))
+    preview_target_fps = float(preview_defaults.get("target_fps", 12) or 12)
+    # Cap preview to Process-FPS class rates; high targets only burn CPU.
+    preview_target_fps = max(6.0, min(18.0, preview_target_fps))
+    if load >= 3:
+        preview_target_fps = min(preview_target_fps, 10.0)
     preview_max_edge = _preview_encode_max_edge()
+
     stream_meta: dict[str, Any] = {
         "source_fps": float(cfg.get("fps", 25.0) or 25.0),
         "preview_fps_target": preview_target_fps,

@@ -6,12 +6,13 @@ from tf_api.services.settings_service import get_detection_defaults, get_preview
 from tf_core.io.config_loader import load_and_validate_config
 
 
-def test_settings_detection_defaults_are_max_recall():
+def test_settings_detection_defaults_are_realtime_balanced():
     d = get_detection_defaults()
     assert d["detect_every_n_frames"] == 1
     assert d["confidence"] == 0.25
     assert d["iou"] == 0.45
-    assert d["max_detections"] == 500
+    assert d["max_detections"] == 300
+    assert int(d["imgsz"]) <= 960
     assert d["roi_crop"] is True
     assert d["roi_padding"] == 80
 
@@ -19,8 +20,9 @@ def test_settings_detection_defaults_are_max_recall():
 def test_preview_defaults_full_res_paced():
     p = get_preview_defaults()
     assert p["preserve_source_resolution"] is True
-    assert int(p["jpeg_quality"]) >= 60
+    assert int(p["jpeg_quality"]) >= 50
     assert float(p["target_fps"]) >= 8
+    assert float(p["target_fps"]) <= 18
 
 
 def test_config_loader_detector_defaults_match_settings(tmp_path):
@@ -57,8 +59,8 @@ lanes: []
     assert det["detect_every_n_frames"] == 1
     assert float(det["conf"]) == 0.25
     assert float(det["iou"]) == 0.45
-    assert int(det["max_detections"]) == 500
-    assert int(det["imgsz"]) == 1280
+    assert int(det["max_detections"]) == 300
+    assert int(det["imgsz"]) == 960
 
 
 def test_no_legacy_benchmark_packages():

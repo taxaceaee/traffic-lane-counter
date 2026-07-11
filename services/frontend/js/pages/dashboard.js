@@ -23,8 +23,10 @@ function startDashboardPolling() {
     stopDashboardPolling();
     renderDashboardCharts();
     _dashboardTimer = setInterval(() => {
-        if (activeTab === 'dashboard') renderDashboardCharts({ soft: true });
-    }, 5000);
+        if (activeTab === 'dashboard' && !document.hidden) {
+            renderDashboardCharts({ soft: true });
+        }
+    }, 8000);
 }
 
 function _dashClassColor(name, index) {

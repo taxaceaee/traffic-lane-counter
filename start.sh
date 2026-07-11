@@ -78,6 +78,14 @@ export STORAGE_ROOT="${STORAGE_ROOT:-data/storage}"
 export OUTPUT_DIR="${OUTPUT_DIR:-data/outputs}"
 export FRONTEND_DIR="${FRONTEND_DIR:-${PWD}/services/frontend}"
 
+# Realtime multi-cam defaults (override in .env). Balanced cadence + imgsz cap
+# keeps Process/Output FPS usable on laptop GPUs while always-on runs.
+export LIVE_RECALL_MODE="${LIVE_RECALL_MODE:-fps}"
+export LIVE_MAX_IMGSZ="${LIVE_MAX_IMGSZ:-960}"
+export LIVE_PREVIEW_MAX_EDGE="${LIVE_PREVIEW_MAX_EDGE:-960}"
+export ALWAYS_ON_DETECT_EVERY_N="${ALWAYS_ON_DETECT_EVERY_N:-2}"
+export LIVE_VIEWER_DETECT_EVERY_N="${LIVE_VIEWER_DETECT_EVERY_N:-1}"
+
 # YouTube now uses JS challenges and Proof-of-Origin tokens.  Keep the
 # provider local to this development process so `npm run dev` is self-contained
 # and no token/cookie is written into the repository.

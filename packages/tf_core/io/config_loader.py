@@ -68,13 +68,12 @@ def load_and_validate_config(config_path: str | Path) -> dict[str, Any]:
     if not isinstance(detector, dict):
         raise ValueError("'detector' section must be a dictionary.")
 
-    # Defaults for detector — keep in sync with tf_api settings_service defaults
-    # and live camera YAML (max recall + native-res friendly).
+    # Defaults for detector — keep in sync with tf_api settings_service (realtime).
     detector.setdefault("weights", "weights/yolo11n.pt")
-    detector.setdefault("imgsz", 1280)
+    detector.setdefault("imgsz", 960)
     detector.setdefault("half", True)
     detector.setdefault("detect_every_n_frames", 1)
-    detector.setdefault("max_detections", 500)
+    detector.setdefault("max_detections", 300)
     detector.setdefault("roi_crop", True)
     detector.setdefault("roi_padding", 80)
     detector.setdefault("conf", 0.25)

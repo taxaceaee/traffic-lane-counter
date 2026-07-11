@@ -19,11 +19,13 @@ function startCountingPolling() {
     ensureCountingDefaults();
     applyCountingFilter({ soft: false });
     _countingTimer = setInterval(() => {
-        if (activeTab === 'counting') applyCountingFilter({ soft: true });
-    }, 3000);
+        if (activeTab === 'counting' && !document.hidden) {
+            applyCountingFilter({ soft: true });
+        }
+    }, 5000);
     const badge = document.getElementById('counting-rt-badge');
     if (badge) {
-        badge.textContent = 'Realtime 3s';
+        badge.textContent = 'Realtime 5s';
         badge.className = 'px-2 py-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-400';
     }
 }

@@ -1,9 +1,19 @@
 // Per-camera live panel state. Always scoped to `_lastLiveCam` so switching
 // cameras never mixes occupancy / session types / lane-changes.
+//
+// Realtime timing budget (single metrics poll — occupancy prefers WebSocket):
+//   LIVE_METRICS_MS   — HTTP /metrics (status + GPU + FPS chips)
+//   MJPEG health poll — local img dimensions only (no API)
+//   WS                — occupancy / counts / lane-change (push)
+const LIVE_METRICS_MS = 2500;
+const LIVE_MJPEG_DIM_MS = 750;
+const LIVE_WS_RECONNECT_MS = 3000;
+
 let _liveLaneIds = [];
 let _liveLaneChanges = [];
 let _liveOccupancy = {};
 let _liveLoadGeneration = 0;
+let _liveVisibilityHandler = null;
 
 // True after the live pipeline has published absolute vehicle_types at least
 // once for the current camera. When set, ignore count_event increments so
@@ -226,8 +236,9 @@ async function loadLiveCameraData() {
     // Hard-reset side panels immediately so previous camera data never lingers.
     _liveLaneIds = [];
     _resetLivePanelsForCamera();
-    // Abort previous MJPEG immediately so the old camera frees encode/GPU.
+    // Abort previous MJPEG + metrics poll so the old camera frees encode/CPU.
     _stopMJPEGStream();
+    stopLiveMetricsPolling();
     // Fresh camera view starts at 1x so pan offset from previous cam is not kept.
     liveZoomReset();
 
@@ -273,11 +284,10 @@ async function loadLiveCameraData() {
     // Lane-change history for this camera only.
     renderLaneChanges(Array.isArray(changes) ? changes : []);
 
-    // Step 3: Start MJPEG + WS + polls scoped to this camera_id.
+    // Step 3: MJPEG + WS push + one metrics poll (no duplicate HTTP cadence).
     _startMJPEGStream(camera_id);
-    startLiveMetricsPolling(camera_id);
     connectLiveWS(camera_id);
-    _monitorStream(camera_id);
+    startLiveMetricsPolling(camera_id);
 }
 
 // ── Live video zoom / pan ─────────────────────────────────────────────
@@ -583,7 +593,7 @@ async function _startMJPEGStream(cameraId) {
     // cannot beat the load/error listeners.
     liveImg.src = liveUrl;
 
-    // Poll decode status — more reliable than onload for MJPEG.
+    // Local-only decode probe (no API) — MJPEG often never fires onload.
     clearInterval(_mjpegHealthTimer);
     _mjpegHealthTimer = setInterval(() => {
         const img = container.querySelector('#live-mjpeg-img');
@@ -593,7 +603,7 @@ async function _startMJPEGStream(cameraId) {
             return;
         }
         if (img && img.naturalWidth > 0) markLoaded();
-    }, 500);
+    }, LIVE_MJPEG_DIM_MS);
 
     // Only tear down if nothing decoded after a long wait AND metrics show no
     // output. Do not kill a working MJPEG solely because onload never fired.
@@ -735,75 +745,113 @@ async function verifyLiveSourceFromUI() {
     }
 }
 
-function _monitorStream(cameraId) {
-    if (_streamHealthTimer) clearInterval(_streamHealthTimer);
-    _streamHealthTimer = setInterval(async () => {
-        if (_lastLiveCam !== cameraId) {
-            clearInterval(_streamHealthTimer);
-            return;
+function _applyLiveMetricsUi(m) {
+    const set = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = val;
+    };
+    const statusEl = document.getElementById('live-stream-status');
+    renderLiveErrorDiagnostic(m && m.error_details);
+
+    if (statusEl) {
+        if (m && m.status === 'error') {
+            statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Pipeline error');
+        } else if (m && m.status === 'reconnecting') {
+            statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Reconnecting camera...');
+        } else if (m && m.process_fps !== undefined && m.process_fps > 0) {
+            const inFps = m.source_fps > 0 ? m.source_fps.toFixed(1) : '0.0';
+            const procFps = m.process_fps.toFixed(1);
+            const outFps = m.output_fps > 0 ? m.output_fps.toFixed(1) : '0.0';
+            statusEl.textContent = `in ${inFps} | proc ${procFps} | out ${outFps} fps`;
+        } else if (m && m.status === 'connecting') {
+            statusEl.textContent = 'Connecting to camera...';
+        } else if (m && m.status === 'starting') {
+            statusEl.textContent = 'Starting pipeline...';
+        } else if (m && m.status === 'stopped') {
+            statusEl.textContent = 'Stream stopped';
+        } else if (m && m.process_fps !== undefined) {
+            statusEl.textContent = 'No frames received';
+        } else {
+            statusEl.textContent = 'Idle';
         }
-        try {
-            const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
-            const statusEl = document.getElementById('live-stream-status');
-            if (!statusEl) return;
-            renderLiveErrorDiagnostic(m && m.error_details);
-            if (m && m.status === 'error') {
-                statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Pipeline error');
-            } else if (m && m.status === 'reconnecting') {
-                statusEl.textContent = m.error_code ? m.error_code : (m.error || 'Reconnecting camera...');
-            } else if (m && m.process_fps !== undefined && m.process_fps > 0) {
-                const inFps = m.source_fps > 0 ? m.source_fps.toFixed(1) : '0.0';
-                const procFps = m.process_fps.toFixed(1);
-                const outFps = m.output_fps > 0 ? m.output_fps.toFixed(1) : '0.0';
-                statusEl.textContent = `in ${inFps} | proc ${procFps} | out ${outFps} fps`;
-            } else if (m && m.status === 'connecting') {
-                statusEl.textContent = 'Connecting to camera...';
-            } else if (m && m.status === 'starting') {
-                statusEl.textContent = 'Starting pipeline...';
-            } else if (m && m.status === 'stopped') {
-                statusEl.textContent = 'Stream stopped';
-            } else if (m && m.process_fps !== undefined) {
-                statusEl.textContent = 'No frames received';
-            } else {
-                statusEl.textContent = 'Idle';
-            }
-        } catch (e) {}
-    }, 3000);
+    }
+
+    if (!m || (m.process_fps === undefined && !m.avg_latency_ms)) {
+        set('live-input-fps', 'Idle');
+        set('live-fps', 'Idle');
+        set('live-output-fps', 'Idle');
+        set('live-latency', 'No pipeline');
+        set('live-gpu', '—');
+        return;
+    }
+    set('live-input-fps', m.source_fps > 0 ? m.source_fps.toFixed(1) : '—');
+    set('live-fps', m.process_fps > 0 ? m.process_fps.toFixed(1) : (m.status === 'error' ? 'Error' : 'Waiting...'));
+    set('live-output-fps', m.output_fps > 0 ? m.output_fps.toFixed(1) : '—');
+    set('live-latency', m.avg_latency_ms > 0 ? m.avg_latency_ms.toFixed(0) + 'ms' : '—');
+    set('live-gpu', m.gpu_available && m.gpu_util_pct >= 0 ? m.gpu_util_pct.toFixed(0) + '%' : 'N/A');
+    // WS owns high-rate occupancy; metrics is a slow backfill only.
+    if (m.occupancy && typeof m.occupancy === 'object') {
+        renderLiveOccupancy(m.occupancy);
+    }
+    if (m.vehicle_types) {
+        applySessionVehicleTypes(m.vehicle_types);
+    }
 }
 
-// ── Metrics polling ──────────────────────────────────────────────────
+// ── Metrics polling (single HTTP cadence) ────────────────────────────
+
+function stopLiveMetricsPolling() {
+    if (_liveMetricsTimer) {
+        clearInterval(_liveMetricsTimer);
+        _liveMetricsTimer = null;
+    }
+    if (_streamHealthTimer) {
+        clearInterval(_streamHealthTimer);
+        _streamHealthTimer = null;
+    }
+    if (_liveVisibilityHandler) {
+        document.removeEventListener('visibilitychange', _liveVisibilityHandler);
+        _liveVisibilityHandler = null;
+    }
+}
+
+/** Leave Live tab: free MJPEG encode slot + metrics poll + WS for other cams. */
+function stopLivePage() {
+    stopLiveMetricsPolling();
+    _stopMJPEGStream();
+    if (_wsReconnectTimer) {
+        clearTimeout(_wsReconnectTimer);
+        _wsReconnectTimer = null;
+    }
+    if (_ws) {
+        try { _ws.close(); } catch (_) { /* ignore */ }
+        _ws = null;
+    }
+    _mjpegCameraId = null;
+}
 
 function startLiveMetricsPolling(cameraId) {
-    if (_liveMetricsTimer) clearInterval(_liveMetricsTimer);
-    _liveMetricsTimer = setInterval(async () => {
-        if (_lastLiveCam !== cameraId) { clearInterval(_liveMetricsTimer); return; }
+    stopLiveMetricsPolling();
+
+    const tick = async () => {
+        if (_lastLiveCam !== cameraId || activeTab !== 'live') return;
+        if (document.hidden) return; // tab background: free API/CPU for YOLO
         try {
             const m = await apiRequest('/live/' + encodeURIComponent(cameraId) + '/metrics');
             if (_lastLiveCam !== cameraId) return;
-            const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
-            renderLiveErrorDiagnostic(m && m.error_details);
-            if (!m || (m.process_fps === undefined && !m.avg_latency_ms)) {
-                set('live-input-fps', 'Idle');
-                set('live-fps', 'Idle');
-                set('live-output-fps', 'Idle');
-                set('live-latency', 'No pipeline');
-                set('live-gpu', '—');
-                return;
-            }
-            set('live-input-fps', m.source_fps > 0 ? m.source_fps.toFixed(1) : '—');
-            set('live-fps', m.process_fps > 0 ? m.process_fps.toFixed(1) : (m.status === 'error' ? 'Error' : 'Waiting...'));
-            set('live-output-fps', m.output_fps > 0 ? m.output_fps.toFixed(1) : '—');
-            set('live-latency', m.avg_latency_ms > 0 ? m.avg_latency_ms.toFixed(0) + 'ms' : '—');
-            set('live-gpu', m.gpu_available && m.gpu_util_pct >= 0 ? m.gpu_util_pct.toFixed(0) + '%' : 'N/A');
-            // Keep side panels in sync with THIS camera's live pipeline.
-            if (m.occupancy && typeof m.occupancy === 'object') {
-                renderLiveOccupancy(m.occupancy);
-            }
-            if (m.vehicle_types) {
-                applySessionVehicleTypes(m.vehicle_types);
-            }
-        } catch(e) {}
-    }, 2000);
+            _applyLiveMetricsUi(m);
+        } catch (_) { /* offline — WS may still update occupancy */ }
+    };
+
+    // Immediate paint, then paced poll.
+    tick();
+    _liveMetricsTimer = setInterval(tick, LIVE_METRICS_MS);
+
+    // Resume promptly when user returns to the tab.
+    _liveVisibilityHandler = () => {
+        if (!document.hidden && _lastLiveCam === cameraId && activeTab === 'live') tick();
+    };
+    document.addEventListener('visibilitychange', _liveVisibilityHandler);
 }
 
 // ── WebSocket ────────────────────────────────────────────────────────
@@ -885,7 +933,7 @@ function connectLiveWS(cameraId) {
             if (_lastLiveCam !== cameraId) return;
             _wsReconnectTimer = setTimeout(() => {
                 if (_lastLiveCam === cameraId) connectLiveWS(cameraId);
-            }, 10000);
+            }, LIVE_WS_RECONNECT_MS);
         };
         _ws.onerror = () => { if (_ws) _ws.close(); };
     } catch(e) {}
