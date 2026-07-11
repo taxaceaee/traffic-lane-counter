@@ -42,6 +42,20 @@
                 <div class="flex justify-between items-center mb-3">
                     <h4 class="text-sm font-bold text-white">Annotated Video Playback</h4>
                     <div class="flex items-center gap-3">
+                        <div class="flex items-center gap-1 bg-slate-950/60 border border-slate-800 rounded-lg p-0.5">
+                            <button type="button" id="live-zoom-out" onclick="liveZoomOut()" title="Zoom out"
+                                    class="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+                                <i data-lucide="zoom-out" class="h-3.5 w-3.5"></i>
+                            </button>
+                            <button type="button" id="live-zoom-reset" onclick="liveZoomReset()" title="Reset zoom"
+                                    class="min-w-[3.25rem] px-1.5 py-1 rounded-md text-[11px] font-semibold tabular-nums text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
+                                100%
+                            </button>
+                            <button type="button" id="live-zoom-in" onclick="liveZoomIn()" title="Zoom in"
+                                    class="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+                                <i data-lucide="zoom-in" class="h-3.5 w-3.5"></i>
+                            </button>
+                        </div>
                         <span id="live-stream-status" class="text-xs text-slate-400">Idle</span>
                         <div class="flex items-center gap-1.5">
                         <span class="pulse-dot w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
@@ -49,9 +63,9 @@
                         </div>
                     </div>
                 </div>
-                <div id="live-video-container" class="bg-slate-950 border border-slate-800 rounded-xl aspect-video w-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
+                <div id="live-video-container" class="relative bg-slate-950 border border-slate-800 rounded-xl aspect-video w-full overflow-hidden flex flex-col items-center justify-center text-center text-slate-500 select-none">
                     <i data-lucide="video-off" class="h-10 w-10 text-slate-700 mb-3"></i>
-                    <p class="text-sm">Select a camera and run an inference job to view the annotated stream.</p>
+                    <p class="text-sm px-6">Select a camera and run an inference job to view the annotated stream.</p>
                 </div>
                 <div id="live-error-panel" class="hidden mt-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-left">
                     <div class="flex items-start gap-3">

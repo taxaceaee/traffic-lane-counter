@@ -132,6 +132,8 @@ async function loadLiveCameraData() {
     _sessionCounts = _emptySessionCounts();
     _hasLiveVehicleTypes = false;
     updateVehicleTypeDisplay();
+    // Fresh camera view starts at 1x so pan offset from previous cam is not kept.
+    liveZoomReset();
 
     // Step 1: Show camera snapshot immediately while data loads
     const container = document.getElementById('live-video-container');
@@ -164,23 +166,187 @@ async function loadLiveCameraData() {
     _monitorStream(camera_id);
 }
 
+// ── Live video zoom / pan ─────────────────────────────────────────────
+const LIVE_ZOOM_MIN = 1;
+const LIVE_ZOOM_MAX = 5;
+const LIVE_ZOOM_STEP = 0.25;
+
+let _liveZoom = 1;
+let _livePanX = 0;
+let _livePanY = 0;
+let _livePanDrag = null;
+
+function liveZoomIn() {
+    _setLiveZoom(_liveZoom + LIVE_ZOOM_STEP);
+}
+
+function liveZoomOut() {
+    _setLiveZoom(_liveZoom - LIVE_ZOOM_STEP);
+}
+
+function liveZoomReset() {
+    _liveZoom = 1;
+    _livePanX = 0;
+    _livePanY = 0;
+    _applyLiveZoomTransform();
+    _updateLiveZoomLabel();
+}
+
+function _setLiveZoom(next, pivot) {
+    const container = document.getElementById('live-video-container');
+    const prev = _liveZoom;
+    const clamped = Math.min(
+        LIVE_ZOOM_MAX,
+        Math.max(LIVE_ZOOM_MIN, Math.round(next / LIVE_ZOOM_STEP) * LIVE_ZOOM_STEP),
+    );
+    // Avoid float noise (e.g. 1.0000002)
+    _liveZoom = Math.round(clamped * 100) / 100;
+
+    if (_liveZoom <= 1) {
+        _livePanX = 0;
+        _livePanY = 0;
+    } else if (pivot && container && prev > 0) {
+        // Keep the point under the cursor fixed while scaling from center.
+        const rect = container.getBoundingClientRect();
+        const cx = pivot.x - rect.left - rect.width / 2;
+        const cy = pivot.y - rect.top - rect.height / 2;
+        const localX = (cx - _livePanX) / prev;
+        const localY = (cy - _livePanY) / prev;
+        _livePanX = cx - _liveZoom * localX;
+        _livePanY = cy - _liveZoom * localY;
+    }
+
+    _clampLivePan();
+    _applyLiveZoomTransform();
+    _updateLiveZoomLabel();
+}
+
+function _clampLivePan() {
+    const container = document.getElementById('live-video-container');
+    if (!container || _liveZoom <= 1) {
+        _livePanX = 0;
+        _livePanY = 0;
+        return;
+    }
+    const rect = container.getBoundingClientRect();
+    const maxX = (rect.width * (_liveZoom - 1)) / 2 + 8;
+    const maxY = (rect.height * (_liveZoom - 1)) / 2 + 8;
+    _livePanX = Math.max(-maxX, Math.min(maxX, _livePanX));
+    _livePanY = Math.max(-maxY, Math.min(maxY, _livePanY));
+}
+
+function _applyLiveZoomTransform() {
+    const stage = document.getElementById('live-video-stage');
+    if (!stage) return;
+    stage.style.transform = `translate(${_livePanX}px, ${_livePanY}px) scale(${_liveZoom})`;
+    stage.style.cursor = _liveZoom > 1 ? 'grab' : 'default';
+}
+
+function _updateLiveZoomLabel() {
+    const label = document.getElementById('live-zoom-reset');
+    if (label) label.textContent = Math.round(_liveZoom * 100) + '%';
+    const outBtn = document.getElementById('live-zoom-out');
+    const inBtn = document.getElementById('live-zoom-in');
+    if (outBtn) {
+        outBtn.disabled = _liveZoom <= LIVE_ZOOM_MIN;
+        outBtn.classList.toggle('opacity-40', _liveZoom <= LIVE_ZOOM_MIN);
+    }
+    if (inBtn) {
+        inBtn.disabled = _liveZoom >= LIVE_ZOOM_MAX;
+        inBtn.classList.toggle('opacity-40', _liveZoom >= LIVE_ZOOM_MAX);
+    }
+}
+
+function _bindLiveVideoZoom() {
+    const container = document.getElementById('live-video-container');
+    // Rebind when the Live page HTML is re-injected (container is a new node).
+    if (!container || container.dataset.zoomBound === '1') return;
+    container.dataset.zoomBound = '1';
+
+    container.addEventListener('wheel', (e) => {
+        if (!document.getElementById('live-video-stage')) return;
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? LIVE_ZOOM_STEP : -LIVE_ZOOM_STEP;
+        _setLiveZoom(_liveZoom + delta, { x: e.clientX, y: e.clientY });
+    }, { passive: false });
+
+    container.addEventListener('pointerdown', (e) => {
+        if (_liveZoom <= 1 || e.button !== 0) return;
+        // Ignore clicks on overlay buttons/links inside the stage.
+        if (e.target.closest('button, a')) return;
+        _livePanDrag = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            originX: _livePanX,
+            originY: _livePanY,
+        };
+        try { container.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+        container.style.cursor = 'grabbing';
+    });
+
+    container.addEventListener('pointermove', (e) => {
+        if (!_livePanDrag || e.pointerId !== _livePanDrag.pointerId) return;
+        _livePanX = _livePanDrag.originX + (e.clientX - _livePanDrag.startX);
+        _livePanY = _livePanDrag.originY + (e.clientY - _livePanDrag.startY);
+        _clampLivePan();
+        _applyLiveZoomTransform();
+    });
+
+    const endDrag = (e) => {
+        if (!_livePanDrag || e.pointerId !== _livePanDrag.pointerId) return;
+        _livePanDrag = null;
+        container.style.cursor = _liveZoom > 1 ? 'grab' : '';
+    };
+    container.addEventListener('pointerup', endDrag);
+    container.addEventListener('pointercancel', endDrag);
+
+    container.addEventListener('dblclick', (e) => {
+        if (!document.getElementById('live-video-stage')) return;
+        if (e.target.closest('button, a')) return;
+        e.preventDefault();
+        if (_liveZoom > 1) liveZoomReset();
+        else _setLiveZoom(2, { x: e.clientX, y: e.clientY });
+    });
+}
+
+/**
+ * Mount stream/snapshot content inside a zoomable stage layer.
+ * Overlays that should stay fixed (LIVE badge) can be passed separately.
+ */
+function _mountLiveVideoStage(container, stageHtml, overlayHtml = '') {
+    if (!container) return;
+    container.classList.remove('p-6', 'text-center');
+    container.innerHTML = `
+        <div id="live-video-stage"
+             class="absolute inset-0 will-change-transform"
+             style="transform-origin: center center;">
+            ${stageHtml}
+        </div>
+        ${overlayHtml}`;
+    _bindLiveVideoZoom();
+    _applyLiveZoomTransform();
+    _updateLiveZoomLabel();
+    if (window.lucide) lucide.createIcons();
+}
+
 // ── Snapshot (shown immediately, before pipeline starts) ──────────────
 
 function _showSnapshot(container, cameraId) {
     const snapshotUrl = BASE_URL + `/api/cameras/${cameraId}/snapshot`;
-    container.innerHTML = `
-        <div class="relative w-full h-full flex flex-col items-center justify-center">
-            <img class="w-full h-full rounded-xl object-contain bg-slate-950"
-                 src=""
-                 alt="Camera snapshot"
-                 id="live-snapshot-img"
-                 onerror="this.style.display='none'">
-            <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
-                <span class="w-2 h-2 rounded-full bg-amber-500 inline-block animate-pulse"></span>
-                <span class="text-xs text-amber-400">Connecting to live stream...</span>
-            </div>
-        </div>`;
-    lucide.createIcons();
+    _mountLiveVideoStage(
+        container,
+        `<img class="w-full h-full object-contain bg-slate-950"
+              src=""
+              alt="Camera snapshot"
+              id="live-snapshot-img"
+              draggable="false"
+              onerror="this.style.display='none'">`,
+        `<div class="absolute bottom-3 left-3 z-10 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg pointer-events-none">
+            <span class="w-2 h-2 rounded-full bg-amber-500 inline-block animate-pulse"></span>
+            <span class="text-xs text-amber-400">Connecting to live stream...</span>
+        </div>`,
+    );
 
     const snapshotImg = document.getElementById('live-snapshot-img');
     _setProtectedImage(snapshotImg, snapshotUrl);
@@ -230,17 +396,17 @@ async function _startMJPEGStream(cameraId) {
     // response can stay open and produce output metrics while the old image
     // decoder keeps rendering a blank frame.  A fresh node gets a clean image
     // decoder and starts the multipart request exactly once.
-    container.innerHTML = `
-        <div class="relative w-full h-full">
-            <img class="w-full h-full rounded-xl object-contain bg-slate-950"
-                 alt="Live stream"
-                 id="live-mjpeg-img">
-            <div class="absolute top-3 left-3 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
-                <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                <span class="text-xs text-emerald-400">LIVE</span>
-            </div>
-        </div>`;
-    lucide.createIcons();
+    _mountLiveVideoStage(
+        container,
+        `<img class="w-full h-full object-contain bg-slate-950"
+              alt="Live stream"
+              id="live-mjpeg-img"
+              draggable="false">`,
+        `<div class="absolute top-3 left-3 z-10 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg pointer-events-none">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+            <span class="text-xs text-emerald-400">LIVE</span>
+        </div>`,
+    );
 
     const liveImg = container.querySelector('#live-mjpeg-img');
     if (!liveImg) {
@@ -288,22 +454,22 @@ function _showStreamError(cameraId, container) {
     const img = container.querySelector('#live-mjpeg-img');
     if (img) { img.onerror = null; img.src = ''; img.remove(); }
 
-    // Show snapshot + error
+    // Show snapshot + error (Retry stays fixed overlay so zoom does not hide it)
     const snapshotUrl = BASE_URL + `/api/cameras/${cameraId}/snapshot`;
-    container.innerHTML = `
-        <div class="relative w-full h-full flex flex-col items-center justify-center">
-            <img class="w-full h-full rounded-xl object-contain bg-slate-950"
-                 src=""
-                 alt="Camera snapshot"
-                 id="live-snapshot-img"
-                 onerror="this.style.display='none'">
-            <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
-                <i data-lucide="video-off" class="h-3.5 w-3.5 text-rose-400"></i>
-                <span class="text-xs text-rose-400">Stream: starting...</span>
-                <button onclick="loadLiveCameraData()" class="text-xs text-indigo-400 hover:text-indigo-300 ml-2">Retry</button>
-            </div>
-        </div>`;
-    lucide.createIcons();
+    _mountLiveVideoStage(
+        container,
+        `<img class="w-full h-full object-contain bg-slate-950"
+              src=""
+              alt="Camera snapshot"
+              id="live-snapshot-img"
+              draggable="false"
+              onerror="this.style.display='none'">`,
+        `<div class="absolute bottom-3 left-3 z-10 flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg">
+            <i data-lucide="video-off" class="h-3.5 w-3.5 text-rose-400"></i>
+            <span class="text-xs text-rose-400">Stream: starting...</span>
+            <button type="button" onclick="loadLiveCameraData()" class="text-xs text-indigo-400 hover:text-indigo-300 ml-2">Retry</button>
+        </div>`,
+    );
     const snapshotImg = document.getElementById('live-snapshot-img');
     _setProtectedImage(snapshotImg, snapshotUrl);
 
