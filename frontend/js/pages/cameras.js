@@ -19,18 +19,32 @@ function renderCamerasGrid() {
                 <p><span class="text-slate-500">Source:</span> <code class="bg-slate-950 px-1 py-0.5 rounded text-xs text-indigo-400 break-all">${escapeHtml(c.source)}</code></p>
                 <p><span class="text-slate-500">Resolution:</span> ${c.frame_width}x${c.frame_height} @ ${c.fps} FPS</p>
             </div>
-            <div class="mt-4 flex gap-2">
-                <button onclick="testCameraConnection('${c.camera_id}')" class="flex-1 text-xs py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:border-indigo-500 hover:text-indigo-400 transition-all">
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button onclick="testCameraConnection('${c.camera_id}')" class="flex-1 min-w-[4.5rem] text-xs py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:border-indigo-500 hover:text-indigo-400 transition-all">
                     <i data-lucide="cable" class="h-3 w-3 inline mr-1"></i> Test
                 </button>
-                <button onclick="viewSnapshot('${c.camera_id}')" class="flex-1 text-xs py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:border-emerald-500 hover:text-emerald-400 transition-all">
+                <button onclick="viewSnapshot('${c.camera_id}')" class="flex-1 min-w-[4.5rem] text-xs py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:border-emerald-500 hover:text-emerald-400 transition-all">
                     <i data-lucide="camera" class="h-3 w-3 inline mr-1"></i> Snapshot
                 </button>
-                <button onclick="switchTab('lanes')" class="flex-1 text-xs py-1.5 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-all">Config Lanes</button>
+                <button onclick="openCameraLive('${c.camera_id}')" class="flex-1 min-w-[4.5rem] text-xs py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:border-sky-500 hover:text-sky-400 transition-all">
+                    <i data-lucide="radio" class="h-3 w-3 inline mr-1"></i> Live
+                </button>
+                <button onclick="openCameraLanes('${c.camera_id}')" class="flex-1 min-w-[4.5rem] text-xs py-1.5 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-all">Lanes</button>
             </div>
         </div>
     `).join('');
     lucide.createIcons();
+}
+
+function openCameraLive(cameraId) {
+    localStorage.setItem('live_camera_id', cameraId);
+    _lastLiveCam = cameraId;
+    switchTab('live');
+}
+
+function openCameraLanes(cameraId) {
+    localStorage.setItem('lanes_camera_id', cameraId);
+    switchTab('lanes');
 }
 
 async function testCameraConnection(cameraId) {

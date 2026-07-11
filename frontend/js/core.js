@@ -35,8 +35,10 @@ let _healthTimer = null;
 let _healthHistory = [];
 
 // ApexCharts instances
+// Page-scoped chart handles (never share Apex instances across tabs).
 let chartHourly = null, chartVehicleTypes = null, chartMetrics = null;
-let chartVolumes = null, chartAverages = null, chartHeatmap = null, chartCountingLanes = null;
+let chartReportsVolumes = null, chartReportsDirection = null, chartReportsOccupancy = null;
+let chartReportsHeatmap = null;
 
 // ── Route map: tabId → clean URL path ────────────────────────────────────
 const ROUTE_MAP = {
@@ -48,7 +50,6 @@ const ROUTE_MAP = {
     lanes: '/lanes',
     jobs: '/jobs',
     models: '/models',
-    analytics: '/analytics',
     events: '/events',
     reports: '/reports',
     health: '/health',
@@ -63,6 +64,8 @@ function urlForTab(tabId) {
 function tabFromPath(pathname) {
     if (!pathname || pathname === '/') return 'dashboard';
     const segment = pathname.replace(/^\/|\/$/g, '').split('/')[0];
+    // Legacy bookmark: Analytics was merged into Reports.
+    if (segment === 'analytics') return 'reports';
     for (const [tabId, url] of Object.entries(ROUTE_MAP)) {
         if (url === '/' + segment) return tabId;
     }
@@ -203,7 +206,6 @@ async function switchTab(tabId) {
         stopAlertPolling();
     }
     if (tabId === 'health') { startHealthPolling(); }
-    if (tabId === 'analytics') { loadAnalyticsData(); }
     if (tabId === 'counting') { applyCountingFilter(); }
     if (tabId === 'reports') { loadReportsData(); }
     if (tabId === 'events') { loadEventsData(); }
@@ -232,20 +234,19 @@ async function switchTab(tabId) {
 
 function updatePageHeader(tabId) {
     const headers = {
-        dashboard: ["Dashboard", "Traffic overview — today's KPIs, trends, and top cameras."],
+        dashboard: ["Dashboard", "Fleet overview — 24h KPIs, peaks, top cameras, and system readiness."],
         live:      ["Live Monitoring", "Real-time annotated video, lane occupancy, and AI inference metrics."],
-        counting:  ["Vehicle Counting", "Count vehicles by lane, type, camera and time range. Export CSV."],
-        alerts:    ["Alert System", "Active alerts and historical notification log."],
-        cameras:   ["Camera Management", "Register, configure and inspect camera sources."],
+        counting:  ["Vehicle Counting", "Filter counts by camera, time, and type. Review recent line crossings."],
+        alerts:    ["Alert System", "Active incidents, remediation steps, and alert history."],
+        cameras:   ["Camera Management", "Register sources, test connectivity, and open Live / Lanes."],
         lanes:     ["Lane Configuration", "Edit lane polygon coordinates and counting lines per camera."],
-        jobs:      ["Inference Jobs", "Launch and monitor video inference jobs."],
-        models:    ["Model Management", "Review registered YOLO detection models and parameters."],
-        analytics: ["Traffic Analytics", "Density heatmap, volume trends, and occupancy statistics."],
-        events:    ["Lane-change Events", "Full log of vehicle lane-change events."],
-        reports:   ["Reports", "Benchmark evaluation metrics: mAP, IDF1, counting accuracy."],
-        health:    ["System Health", "API, database, GPU, and worker node status."],
+        jobs:      ["Inference Jobs", "Launch batch jobs, inspect progress, and open annotated video."],
+        models:    ["Model Management", "YOLO weight registry — upload, rename, and remove models."],
+        events:    ["Events Log", "Lane-change and line-crossing event ledger with export."],
+        reports:   ["Reports & Analytics", "Period lane reports, direction split, heatmap, and CSV export."],
+        health:    ["System Health", "API, database, GPU, workers, and host resource telemetry."],
         users:     ["Users & Audit", "User management and administration audit trail."],
-        settings:  ["Settings", "API connection, AI model parameters, and output configuration."]
+        settings:  ["Settings", "Runtime defaults: detection, storage, system, and notifications."]
     };
     if (headers[tabId]) {
         document.getElementById('page-title').innerText = headers[tabId][0];
@@ -327,9 +328,21 @@ function clearContainer(id) {
 function populateSelectors() {
     const camOpts = camerasList.map(c => `<option value="${escapeHtml(c.camera_id)}">${escapeHtml(c.camera_id)} — ${escapeHtml(c.name)}</option>`).join('');
     const modelOpts = modelsList.map(m => `<option value="${escapeHtml(m.model_id)}">${escapeHtml(m.model_id)}</option>`).join('');
-    ['overview-cam-select','live-cam-select','lanes-cam-select','analytics-cam-select'].forEach(id => {
+    // Every camera dropdown on every page (except optional empty first option).
+    const camSelectIds = [
+        'overview-cam-select', 'live-cam-select', 'lanes-cam-select',
+        'reports-cam-select', 'events-cam-select', 'count-filter-camera',
+    ];
+    camSelectIds.forEach((id) => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = camOpts;
+        if (!el) return;
+        const prev = el.value;
+        if (id === 'count-filter-camera' || id === 'events-cam-select') {
+            el.innerHTML = '<option value="">— Select camera —</option>' + camOpts;
+        } else {
+            el.innerHTML = camOpts;
+        }
+        if (prev && Array.from(el.options).some((o) => o.value === prev)) el.value = prev;
     });
     const liveSelect = document.getElementById('live-cam-select');
     if (liveSelect && camerasList.length) {
@@ -340,8 +353,6 @@ function populateSelectors() {
             || camerasList[0];
         if (livePreferred) liveSelect.value = livePreferred.camera_id;
     }
-    const cf = document.getElementById('count-filter-camera');
-    if (cf) cf.innerHTML = '<option value="">— Select camera —</option>' + camOpts;
     const om = document.getElementById('overview-model-select');
     if (om) om.innerHTML = modelOpts;
 }

@@ -4,11 +4,15 @@
                 <label class="text-xs font-semibold uppercase text-slate-500">Camera</label>
                 <select id="reports-cam-select" onchange="loadReportsData()" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"></select>
             </div>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                <button type="button" id="reports-period-day" onclick="setReportsPeriod('day')" class="px-3 py-1.5 rounded text-xs font-semibold text-white bg-indigo-600">24h</button>
+                <button type="button" id="reports-period-week" onclick="setReportsPeriod('week')" class="px-3 py-1.5 rounded text-xs font-semibold text-slate-400 hover:text-white">7d</button>
+                <button type="button" id="reports-period-month" onclick="setReportsPeriod('month')" class="px-3 py-1.5 rounded text-xs font-semibold text-slate-400 hover:text-white">30d</button>
+                <button type="button" id="reports-period-custom" onclick="setReportsPeriod('custom')" class="px-3 py-1.5 rounded text-xs font-semibold text-slate-400 hover:text-white">Custom</button>
+            </div>
+            <div id="reports-custom-range" class="hidden flex items-center gap-3">
                 <label class="text-xs font-semibold uppercase text-slate-500">From</label>
                 <input id="reports-filter-from" type="date" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
-            </div>
-            <div class="flex items-center gap-3">
                 <label class="text-xs font-semibold uppercase text-slate-500">To</label>
                 <input id="reports-filter-to" type="date" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-indigo-500">
             </div>
@@ -41,6 +45,12 @@
                 <p class="text-xs text-slate-500 mb-1">Buses</p>
                 <p class="text-2xl font-extrabold text-rose-400" id="report-total-buses">0</p>
             </div>
+        </div>
+
+        <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
+            <h4 class="text-base font-bold text-white mb-1">Lane × Hour Heatmap</h4>
+            <p class="text-xs text-slate-500 mb-4">Traffic density by lane and hour of day (period window).</p>
+            <div id="chart-reports-heatmap" class="overflow-hidden" style="min-height:280px"></div>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">

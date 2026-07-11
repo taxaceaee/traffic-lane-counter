@@ -22,6 +22,33 @@ async function renderDashboardCharts() {
     document.getElementById('kpi-cameras-sub').innerText = totalCam ? totalCam + ' total registered' : (camerasList.length + ' total registered');
     document.getElementById('kpi-active-lanes').innerText = totalLanes ? totalLanes : '—';
 
+    // Real readiness chip (not a static "Healthy" label).
+    const statusEl = document.getElementById('kpi-system-status');
+    const statusSub = document.getElementById('kpi-status-sub');
+    try {
+        const ready = await apiRequest('/api/readyz');
+        if (statusEl) {
+            if (ready && (ready.status === 'ok' || ready.ready === true || ready.status === 'ready')) {
+                statusEl.innerText = 'Ready';
+                statusEl.className = 'text-3xl font-extrabold text-emerald-400';
+                if (statusSub) statusSub.innerText = 'Dependencies healthy';
+            } else if (ready) {
+                statusEl.innerText = 'Degraded';
+                statusEl.className = 'text-3xl font-extrabold text-amber-400';
+                if (statusSub) statusSub.innerText = 'See System Health';
+            } else {
+                statusEl.innerText = 'Offline';
+                statusEl.className = 'text-3xl font-extrabold text-rose-400';
+                if (statusSub) statusSub.innerText = 'API not reachable';
+            }
+        }
+    } catch (_) {
+        if (statusEl) {
+            statusEl.innerText = 'Unknown';
+            statusEl.className = 'text-3xl font-extrabold text-slate-400';
+        }
+    }
+
     // Vehicle type donut
     const typeColors = ['#6366f1','#10b981','#f59e0b','#ef4444','#38bdf8','#a78bfa','#fb923c'];
     const typeLabels = Object.keys(typeDist);
@@ -101,22 +128,22 @@ async function renderDashboardCharts() {
         });
     }
 
-    // Active alerts
+    // Alert teaser only (full incident UI lives on Alerts page).
     const alertsList = document.getElementById('active-alerts-list');
-    if (alerts && alerts.length) {
-        const severityColors = { critical: 'rose', warning: 'amber', info: 'blue' };
-        alertsList.innerHTML = alerts.slice(0, 5).map(a => {
-            const sev = a.severity || 'info';
-            const color = severityColors[sev] || 'slate';
-            return `<div class="alert-${sev} bg-${color}-500/5 rounded-lg p-3">
-                <p class="text-xs font-bold text-${color}-400">${escapeHtml(a.title || a.camera_id || 'Alert')}</p>
-                <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(a.message || '')}</p>
-            </div>`;
-        }).join('');
-    } else if (activeAlerts > 0) {
-        alertsList.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">${activeAlerts} active alert(s)</p>`;
-    } else {
-        alertsList.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">No active alerts</p>';
+    if (alertsList) {
+        const n = (alerts && alerts.length) ? alerts.length : (activeAlerts || 0);
+        if (n > 0) {
+            const top = (alerts || []).slice(0, 3);
+            alertsList.innerHTML = `
+                <div class="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 mb-2">
+                    <p class="text-sm font-bold text-rose-300">${n} active alert${n === 1 ? '' : 's'}</p>
+                    <p class="text-xs text-slate-500 mt-0.5">Open Alerts for resolve / verify actions.</p>
+                </div>
+                ${top.map((a) => `<p class="text-xs text-slate-400 truncate">• ${escapeHtml(a.title || a.camera_id || 'Alert')}</p>`).join('')}
+            `;
+        } else {
+            alertsList.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">No active alerts</p>';
+        }
     }
 
     // Hourly chart

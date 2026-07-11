@@ -13,13 +13,27 @@ async function fetchHealthData() {
     if (!token) return;
     const headers = { 'Authorization': 'Bearer ' + token };
 
-    const health = await apiRequestWithHeaders('/api/admin/system-health', headers);
+    const [health, history, worker] = await Promise.all([
+        apiRequestWithHeaders('/api/admin/system-health', headers),
+        apiRequestWithHeaders('/api/admin/system-health/history', headers),
+        apiRequest('/api/health/worker'),
+    ]);
+
     if (health) {
-        updateHealthKPIs(health);
+        updateHealthKPIs(health, worker);
         updateHealthGauges(health);
         updateHealthSystemInfo(health);
-        _healthHistory.push(health);
-        if (_healthHistory.length > 120) _healthHistory.shift();
+        // Prefer server-side history when available; otherwise keep client ring buffer.
+        const histRows = Array.isArray(history)
+            ? history
+            : (history && Array.isArray(history.points) ? history.points
+                : (history && Array.isArray(history.data) ? history.data : null));
+        if (histRows && histRows.length) {
+            _healthHistory = histRows.slice(-120);
+        } else {
+            _healthHistory.push(health);
+            if (_healthHistory.length > 120) _healthHistory.shift();
+        }
         renderTrendChart();
     }
 
@@ -34,7 +48,7 @@ function _badgeEl(text, isOk) {
     return `<span class="px-2 py-0.5 rounded text-[10px] font-bold ${cls}">● ${text}</span>`;
 }
 
-function updateHealthKPIs(h) {
+function updateHealthKPIs(h, worker) {
     const apiBadge = document.getElementById('health-api-badge');
     apiBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
     apiBadge.innerText = '● ONLINE';
@@ -60,11 +74,15 @@ function updateHealthKPIs(h) {
     set('health-gpu-text', gpuOk ? (h.gpu.name || 'GPU Active') : 'Fallback CPU');
     document.getElementById('health-gpu-sub').innerHTML = 'Utilization: <span class="text-slate-400">' + (gpuOk && h.gpu.util_pct >= 0 ? h.gpu.util_pct.toFixed(0) + '%' : 'N/A') + '</span>';
 
+    const workerOk = !worker || worker.status === 'ok' || worker.alive === true || worker.ready === true;
     const workersBadge = document.getElementById('health-workers-badge');
-    workersBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
-    workersBadge.innerText = '● OK';
+    workersBadge.className = workerOk
+        ? 'px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+        : 'px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20';
+    workersBadge.innerText = workerOk ? '● OK' : '● CHECK';
     set('health-workers-text', (h.active_jobs || 0) + ' Active');
-    document.getElementById('health-workers-sub').innerHTML = 'Jobs: <span class="text-slate-400">' + (h.active_jobs || 0) + ' running / ' + (h.total_jobs || 0) + ' total</span>';
+    document.getElementById('health-workers-sub').innerHTML = 'Jobs: <span class="text-slate-400">' + (h.active_jobs || 0) + ' running / ' + (h.total_jobs || 0) + ' total</span>'
+        + (worker ? ' · Worker: <span class="text-slate-400">' + escapeHtml(worker.status || 'ok') + '</span>' : '');
 }
 
 function updateHealthGauges(h) {

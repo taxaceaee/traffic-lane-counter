@@ -15,8 +15,13 @@
                 </button>
             </div>
         </div>
+        <div id="job-detail-panel" class="hidden bg-slate-900/50 border border-indigo-500/20 rounded-xl p-6">
+            <h3 class="text-base font-bold text-white mb-4">Job detail</h3>
+            <div id="job-detail-body" class="text-sm text-slate-300"></div>
+        </div>
         <div class="bg-slate-900/40 border border-slate-800 rounded-xl p-6">
             <h3 class="text-base font-bold text-white mb-4">All Jobs</h3>
+            <p class="text-xs text-slate-500 mb-3">Click a row for detail. Use Video to download annotated output when available.</p>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm text-left text-slate-400">
                     <thead class="text-xs uppercase bg-slate-950/60 text-slate-500 border-b border-slate-800">
@@ -28,6 +33,7 @@
                             <th class="px-4 py-3 font-semibold">Progress</th>
                             <th class="px-4 py-3 font-semibold">FPS</th>
                             <th class="px-4 py-3 font-semibold">Started</th>
+                            <th class="px-4 py-3 font-semibold">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="overview-jobs-tbody"></tbody>
