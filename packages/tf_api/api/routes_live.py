@@ -1484,12 +1484,12 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
     """Classic live overlay at preview resolution — thin boxes, outlined labels."""
     canvas = frame  # owned buffer from _preview_canvas
     h, w = canvas.shape[:2]
-    # Slightly firmer than original (was box=2 / font=0.4) for MJPEG, still light.
-    box_th = 2
+    # Thin classic strokes (box 1px + optional dark under-stroke).
+    box_th = 1
     font_scale = 0.5
     font_th = 1
-    lane_th = 2
-    anchor_r = 5
+    lane_th = 1
+    anchor_r = 4
 
     lane_colors = build_lane_color_map([lane["id"] for lane in lanes])
     crossings = det.get("crossings") or []
@@ -1527,12 +1527,12 @@ def _annotate(frame: np.ndarray, det: dict[str, Any], lanes: list[dict]) -> np.n
             raw_lane=t.get("raw_lane"),
         )
         stable = t.get("stable_lane") or t.get("raw_lane") or "none"
-        # Thin color box + 1px dark under-stroke for edge definition (not bulky).
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), box_th + 1, lineType=cv2.LINE_AA)
+        # Single-pixel color box; light dark halo only when needed for contrast.
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), 2, lineType=cv2.LINE_AA)
         cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, box_th, lineType=cv2.LINE_AA)
         cx = (x1 + x2) // 2
         cv2.circle(canvas, (cx, y2), anchor_r, (0, 0, 0), -1, lineType=cv2.LINE_AA)
-        cv2.circle(canvas, (cx, y2), max(3, anchor_r - 1), box_color, -1, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, (cx, y2), max(2, anchor_r - 1), box_color, -1, lineType=cv2.LINE_AA)
 
         label = f"#{t['track_id']} {t['class_name']} ({stable})"
         label_y = y1 - 6 if y1 > 18 else min(h - 6, y2 + 16)
