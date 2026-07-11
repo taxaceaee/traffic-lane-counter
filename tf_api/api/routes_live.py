@@ -498,8 +498,21 @@ def _start_pipeline(
                     detect_ms = (time.perf_counter() - t_detect_start) * 1000
                     _log_timing(camera_id, "detect", detect_ms)
 
-                    # 3. Transform coordinates from crop space → pipeline frame
-                    _restore_original_bboxes(det, roi, _original_frame_w, _original_frame_h)
+                    # 3. Keep the core/tracker result in crop-space.  The
+                    # tracker and LaneStateManager retain references to these
+                    # bbox lists; mutating them in-place to original-frame
+                    # coordinates corrupts ByteTrack's cache and causes the
+                    # ROI offset to be added again on later frames.
+                    #
+                    # Make a display/storage copy instead and restore only
+                    # that copy to original-frame coordinates.
+                    display_det = deepcopy(det)
+                    _restore_original_bboxes(
+                        display_det,
+                        roi,
+                        _original_frame_w,
+                        _original_frame_h,
+                    )
 
                     # 4. Record metrics
                     timing = dict(det.get("timing_ms", {}))
@@ -511,10 +524,10 @@ def _start_pipeline(
                     # This avoids annotating in-place then reading back annotated pixels
                     # for crop extraction.  Moving it earlier also parallelises work:
                     # the MJPEG queue push and StorageWorker enqueue can overlap.
-                    crossings = det.get("crossings", [])
+                    crossings = display_det.get("crossings", [])
                     bbox_by_track_id = {
                         track.get("track_id"): track.get("bbox")
-                        for track in det.get("frame_tracks", [])
+                        for track in display_det.get("frame_tracks", [])
                         if track.get("track_id") is not None and track.get("bbox")
                     }
                     crop_data: list[tuple[str, int, str, str, float, list[float] | None, bytes | None]] = []
@@ -553,7 +566,7 @@ def _start_pipeline(
 
                     # 5. Annotate in-place on pipeline_frame (avoids ~6 MB copy per frame)
                     t_annotate = time.perf_counter()
-                    annotated = _annotate(pipeline_frame, det, lanes)
+                    annotated = _annotate(pipeline_frame, display_det, lanes)
                     _log_timing(camera_id, "annotate", (time.perf_counter() - t_annotate) * 1000)
 
                     # ── Push frame to browser via encode worker thread ──
